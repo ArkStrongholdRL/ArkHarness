@@ -4,8 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
+from harness.screen.briefing import choose_bond_group, inspect_briefing
 from harness.screen.capture import OCR_RESOURCE, load_ocr
 from harness.screen.command import inspect_command
 from harness.screen.equip_choice import choose_equipment_dialog
@@ -66,6 +68,57 @@ def command_details(tasker, controller):
         assert controller.clicks == [(400, 200)] * (len(phases) - 1)
 
 
+class StrategyMarker(CustomRecognition):
+    def analyze(self, context, argv):
+        return PICK if int(argv.image[0, 0, 0]) >= self.confirmed_phase else None
+
+
+def briefing_groups(tasker, controller):
+    groups = [[f"left{i}" for i in range(5)], [f"right{i}" for i in range(5)]]
+    marker = StrategyMarker()
+    assert tasker.resource.register_custom_recognition("ReplayStrategy", marker)
+    post_task = tasker.post_task
+    override = {
+        "Briefing.Confirmed": {"all_of": ["Replay.Strategy"]},
+        "Replay.Strategy": {"recognition": "Custom", "custom_recognition": "ReplayStrategy"},
+    }
+    for initial, changed_groups in ((0, False), (1, False), (0, True)):
+        reset(controller)
+        marker.confirmed_phase = 2 - initial
+
+        def frame(_, image):
+            phase = int(image[0, 0, 0])
+            return SimpleNamespace(
+                hit=lambda node: node == "Lifecycle.Briefing", phase=phase,
+                rows=lambda node, **opts: [SimpleNamespace(box=PICK if node == "Briefing.GroupButton" else CONFIRM)],
+            )
+
+        def read(frame):
+            selected = min(initial + frame.phase, 1)
+            displayed = groups[::-1] if changed_groups and frame.phase else groups
+            return {"match": {"bondChoice": {"groups": displayed}, "disabledBonds": displayed[1 - selected],
+                              "bossId": "boss"}, "config": {"modeId": "mode"}}
+
+        reader = SimpleNamespace(read=read)
+        with (patch("harness.screen.briefing.Frame", side_effect=frame),
+              patch.object(tasker, "post_task", side_effect=lambda entry: post_task(entry, override))):
+            preview = inspect_briefing(tasker, reader)
+            assert preview["previewSelected"] == initial and not controller.clicks
+            if changed_groups:
+                try:
+                    choose_bond_group(tasker, reader, 1)
+                except RuntimeError as error:
+                    assert "briefing was not confirmed" in str(error)
+                else:
+                    raise AssertionError("Changed briefing groups were confirmed")
+                assert controller.clicks == [(400, 200)]
+            else:
+                result = choose_bond_group(tasker, reader, 1, expected_groups=groups)
+                assert result["bondChoice"] == {"groups": groups, "picked": 1}
+                assert controller.clicks == ([(400, 330)] if initial else [(400, 200), (400, 330)])
+    tasker.resource.unregister_custom_recognition("ReplayStrategy")
+
+
 def main():
     Tasker.set_log_dir(Path("debug/mfw-panel-replay").resolve())
     Tasker.set_save_draw(False)
@@ -76,6 +129,7 @@ def main():
     tasker = load_ocr(controller, OCR_RESOURCE)
     equipment_choice(tasker, controller)
     command_details(tasker, controller)
+    briefing_groups(tasker, controller)
     print("MFW panel replay passed")
 
 
