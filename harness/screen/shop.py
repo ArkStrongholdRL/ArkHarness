@@ -47,10 +47,8 @@ class ShopViewRecognition(CustomRecognition):
     def __init__(self, expanded: bool):
         super().__init__()
         self.expanded = expanded
-        self.before = None
-        self.result = None
 
-    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> tuple | None:
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | tuple | None:
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
@@ -73,13 +71,14 @@ class ShopViewRecognition(CustomRecognition):
         if kind == "switch":
             if expanded == self.expanded:
                 return None
-            self.before = state
-            return tuple(buttons[0].box)
-        if expanded != self.expanded or (self.before is not None and
-                (current_round, funds) != (self.before["round"], self.before["funds"])):
+            return self.AnalyzeResult(tuple(buttons[0].box), {"before": state})
+        if kind != "verify" or expanded != self.expanded:
             return None
-        self.result = {"before": self.before or state, "after": state, "clicked": self.before is not None}
-        return (0, 0, 1, 1)
+        switch = completed_data(argv.task_detail.nodes, "Shop.SwitchView")
+        before = switch["before"] if switch is not None else state
+        if (current_round, funds) != (before["round"], before["funds"]):
+            return None
+        return receipt({"before": before, "after": state, "clicked": switch is not None})
 
 
 def set_shop_open(tasker: Tasker, expanded: bool) -> dict:
@@ -89,9 +88,11 @@ def set_shop_open(tasker: Tasker, expanded: bool) -> dict:
     recognition = ShopViewRecognition(expanded)
     with task_recognition(tasker, "ArkShopView", recognition):
         job = tasker.post_task("Shop.SetView").wait()
-    if not job.succeeded or recognition.result is None:
+    detail = job.get()
+    result = completed_data(detail.nodes, "Shop.ViewVerified") if detail else None
+    if not job.succeeded or result is None:
         raise RuntimeError("The requested shop view could not be verified")
-    return recognition.result
+    return result["receipt"]
 
 
 class BuyRecognition(CustomRecognition):

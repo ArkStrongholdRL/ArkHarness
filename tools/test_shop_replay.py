@@ -9,7 +9,7 @@ from maa.tasker import Tasker
 
 from harness.screen.capture import OCR_RESOURCE, load_ocr
 from harness.screen.native import OfflineController
-from harness.screen.shop import buy_slot, change_shop, pick_reward, quote_slot
+from harness.screen.shop import buy_slot, change_shop, pick_reward, quote_slot, set_shop_open
 
 
 POSITION = {"engineIndex": 0, "screenIndex": 1, "kind": "chess", "center": [300, 600],
@@ -39,14 +39,22 @@ class ReplayFrame:
         self.state = states[min(int(image[0, 0, 0]), len(states) - 1)]
 
     def text(self, name, **_):
+        if name == "ArkRoundNumber":
+            return "回合9"
+        if name == "Screen.Funds":
+            return str(self.state["funds"])
         if name == "Screen.ShopCardPrice":
             return str(self.state["card"]["price"])
         assert name == "Screen.RefreshPrice"
         return str(self.state["price"])
 
     def hit(self, name, **_):
-        return ((name == "Shop.ConfirmLevelText" and self.state.get("confirmation") == "level")
+        return (name == "ArkRestText" or (name == "Shop.Expanded" and self.state.get("expanded", False))
+                or (name == "Shop.ConfirmLevelText" and self.state.get("confirmation") == "level")
                 or (name == "Screen.ShopSold" and self.state.get("sold", False)))
+
+    def scene(self):
+        return "preparation"
 
     def rows(self, name, **_):
         if name == "Shop.OfferLabels":
@@ -94,6 +102,19 @@ def main():
     assert controller.set_screenshot_use_raw_size(True)
     assert controller.post_connection().wait().succeeded
     tasker = load_ocr(controller, OCR_RESOURCE)
+    for expanded in (True, False):
+        before = {**IDLE, "expanded": not expanded}
+        after = {**IDLE, "expanded": expanded}
+        expected = {"round": 9, "funds": 4, "expanded": expanded}
+        switched = replay(tasker, controller, [before, after], lambda: set_shop_open(tasker, expanded),
+                          clicks=[(500, 650)])
+        assert switched == {"before": {**expected, "expanded": not expanded}, "after": expected, "clicked": True}
+        already_set = replay(tasker, controller, [after], lambda: set_shop_open(tasker, expanded), clicks=[])
+        assert already_set == {"before": expected, "after": expected, "clicked": False}
+    replay(tasker, controller, [{**IDLE, "expanded": True}, {**IDLE, "funds": 3}],
+           lambda: set_shop_open(tasker, False),
+           clicks=[(500, 650)], error="The requested shop view could not be verified")
+
     reader = SimpleNamespace(
         slots={"shop": {"capacity": 1}}, shop_names={"old", "new"},
         read_mode=lambda _: None, shop_positions=lambda *_: [POSITION],
