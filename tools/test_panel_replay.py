@@ -1,15 +1,18 @@
 """Offline MFW panel transitions with scripted recognition frames."""
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
+from PIL import Image
 
 from harness.screen.briefing import choose_bond_group, inspect_briefing
 from harness.screen.capture import OCR_RESOURCE, load_ocr
 from harness.screen.command import inspect_command
+from harness.screen.commander import CommanderRecognition, run as run_commander, run_pipeline, save_portrait
 from harness.screen.equip_choice import choose_equipment_dialog
 from harness.screen.equipment_read import read_equipment_slots
 from harness.screen.hand import read_hand
@@ -181,6 +184,49 @@ def hand_slots(tasker, controller):
     assert controller.clicks == [(300, 600), (640, 495), (400, 600)]
 
 
+def commander_preview(tasker, controller):
+    for starting_name in ("", "领袖"):
+        reset(controller)
+        marker = StrategyMarker()
+        marker.confirmed_phase = 0
+        assert tasker.resource.register_custom_recognition("ReplayCommander", marker)
+        post_task = tasker.post_task
+        overrides = {
+            "Replay.Strategy": {"recognition": "Custom", "custom_recognition": "ReplayCommander"},
+            "Commander.ReadPage": {"all_of": ["Replay.Strategy", "Commander.Snapshot"]},
+            "Commander.ClickSlot": {"all_of": ["Replay.Strategy", "Commander.Slot"]},
+            "Commander.PreviewOpened": {
+                "all_of": ["Replay.Strategy", "Commander.SelectionChanged", "Commander.Snapshot"],
+            },
+        }
+        layouts = {"gridPlain": {"rows": [300], "columns": [400]},
+                   "gridWithDetail": {"rows": [300], "columns": [400]}}
+
+        def frame(_, image):
+            phase = int(image[0, 0, 0])
+            name = "领袖" if phase else starting_name
+            hits = {
+                "Commander.ConfirmText": bool(name), "Commander.GridWithDetail": bool(name),
+                "Commander.GridPlain": not name, "Commander.SelectedBadge": phase > 0,
+            }
+            return SimpleNamespace(text=lambda _: name, hit=lambda node, **_: hits[node])
+
+        with (patch.object(tasker, "post_task", side_effect=lambda entry, params: post_task(
+                   entry, {**params, **overrides})),
+              patch("harness.screen.commander.Frame", side_effect=frame)):
+            observed = run_commander(tasker, "observe", layouts)
+            assert observed["commander"] == (starting_name or None) and not controller.clicks
+            result = run_pipeline(tasker, "preview", CommanderRecognition(layouts, (1, 1), capture_portrait=True))
+        assert result["snapshot"] == {"screen": "strategySelection", "commander": "领袖", "canConfirm": True}
+        assert controller.clicks == [(400, 300)]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "portrait.png"
+            assert save_portrait(path, result["portrait"])
+            with Image.open(path) as portrait:
+                assert portrait.size == (80, 80)
+        tasker.resource.unregister_custom_recognition("ReplayCommander")
+
+
 def main():
     Tasker.set_log_dir(Path("debug/mfw-panel-replay").resolve())
     Tasker.set_save_draw(False)
@@ -194,6 +240,7 @@ def main():
     briefing_groups(tasker, controller)
     equipment_rack()
     hand_slots(tasker, controller)
+    commander_preview(tasker, controller)
     print("MFW panel replay passed")
 
 
