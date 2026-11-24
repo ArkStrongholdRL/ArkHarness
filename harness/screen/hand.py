@@ -10,6 +10,7 @@ from maa.tasker import Tasker
 
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .native import Frame
+from .session import task_recognition
 from .read import CATALOG, ROOT, Reader, chess_identity, integer, read_json
 
 
@@ -116,11 +117,8 @@ def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, 
         raise ValueError("Hand slots must be unique")
 
     recognition = HandRecognition(reader)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkHand", recognition):
-        raise RuntimeError("Could not register hand inspection")
     observations = []
-    try:
+    with task_recognition(tasker, "ArkHand", recognition):
         for position, slot in enumerate(selected):
             recognition.select_slot(slot)
             override = {"Hand.Inspect": {"next": ["Hand.Pick"]}} if position else {}
@@ -130,8 +128,6 @@ def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, 
             if not job.succeeded or last not in ("Hand.Empty", "Hand.Closed") or recognition.result is None:
                 raise RuntimeError(f"Hand slot {slot} or return to preparation could not be verified")
             observations.append(recognition.result)
-    finally:
-        resource.unregister_custom_recognition("ArkHand")
     observations += [{"screenSlot": slot, "status": "empty", "name": None, "id": None, "baseId": None,
                       "candidateIds": []} for slot in bare]
     observations.sort(key=lambda row: row["screenSlot"])

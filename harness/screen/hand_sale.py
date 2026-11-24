@@ -10,6 +10,7 @@ from maa.tasker import Tasker
 
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .native import Frame
+from .session import task_recognition
 from .read import ROOT, clean, integer, read_json
 
 
@@ -109,10 +110,7 @@ def sell_hand(tasker: Tasker, slots: dict, hand_slot: int, name: str, *,
     if (not inspect or expected_price is not None) and (type(expected_price) is not int or expected_price < 0):
         raise ValueError("A sale requires a nonnegative expected price")
     recognition = HandSaleRecognition(tuple(centers[hand_slot]), name, expected_price)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkHandSale", recognition):
-        raise RuntimeError("Could not register the hand sale recognizer")
-    try:
+    with task_recognition(tasker, "ArkHandSale", recognition):
         if inspect:
             override = {"HandSale.Open": {"next": ["HandSale.Dismiss"]}}
         else:
@@ -121,8 +119,6 @@ def sell_hand(tasker: Tasker, slots: dict, hand_slot: int, name: str, *,
         job = tasker.post_task("HandSale.Run", override).wait()
         detail = job.get()
         nodes = [node.name for node in detail.nodes] if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkHandSale")
     target = {"handSlot": hand_slot, "name": name, "price": recognition.price,
               "before": recognition.before, "after": recognition.after}
     if job.succeeded and nodes and recognition.after is not None and recognition.price is not None:

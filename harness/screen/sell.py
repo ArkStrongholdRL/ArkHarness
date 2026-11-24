@@ -11,6 +11,7 @@ from maa.tasker import Tasker
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .deploy import has_facing_marker, read_board, tile_point
 from .native import Frame
+from .session import task_recognition
 from .read import ROOT, clean, integer, read_json
 
 
@@ -134,17 +135,12 @@ def sell_board(tasker: Tasker, slots: dict, board: dict, name: str, row: int, co
     source = tile_point(board, row, col, view_name="normal")
     recognition = SellRecognition(stage, source, slots["sale"], name, expected_price,
                                   expected_round=expected_round, stage_confirmed=stage_confirmed)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkSell", recognition):
-        raise RuntimeError("Could not register the sale recognizer")
-    try:
+    with task_recognition(tasker, "ArkSell", recognition):
         entry = "Board.InspectSale" if inspect else "Board.Sell"
         override = {"Board.OpenSellDetails": {"next": ["Board.ReadSaleQuote"]}} if inspect else {}
         job = tasker.post_task(entry, override).wait()
         detail = job.get()
         nodes = [node.name for node in detail.nodes] if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkSell")
     target = {"stageId": stage, "name": name, "row": row, "col": col}
     if inspect and job.succeeded and nodes and nodes[-1] == "Board.ReadSaleQuote" and recognition.price is not None:
         return {**target, "price": recognition.price, "before": recognition.before}

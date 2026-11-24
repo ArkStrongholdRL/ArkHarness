@@ -7,6 +7,7 @@ from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
 from .native import Frame
+from .session import task_recognition
 from .read import Reader
 
 
@@ -86,17 +87,12 @@ def choose_bond_group(tasker: Tasker, reader: Reader, group: int, *,
 def run_briefing(tasker: Tasker, reader: Reader, *, group: int | None,
                  expected_groups: list[list[str]] | None) -> dict:
     recognition = BriefingRecognition(reader, group, expected_groups)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkBriefing", recognition):
-        raise RuntimeError("Could not register briefing recognition")
     entry, terminal = ("Briefing.Inspect", "Briefing.Read") if group is None else (
         "Briefing.Select", "Briefing.Confirmed")
-    try:
+    with task_recognition(tasker, "ArkBriefing", recognition):
         job = tasker.post_task(entry).wait()
         detail = job.get()
         steps = [node.name for node in detail.nodes] if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkBriefing")
     if job.succeeded and steps and steps[-1] == terminal and recognition.result is not None:
         result = recognition.result
         if group is None:

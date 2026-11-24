@@ -1,4 +1,34 @@
 {
+  "EquipChoice.Start": {
+    "next": ["EquipChoice.Pick"],
+    "timeout": 4500
+  },
+  "EquipChoice.Pick": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkEquipChoice",
+    "custom_recognition_param": "pick",
+    "action": "Click",
+    "max_hit": 1,
+    "timeout": 4500,
+    "next": ["EquipChoice.Closed", "EquipChoice.Confirm"]
+  },
+  "EquipChoice.Confirm": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkEquipChoice",
+    "custom_recognition_param": "confirm",
+    "action": "Click",
+    "max_hit": 1,
+    "timeout": 4500,
+    "next": ["EquipChoice.Closed"]
+  },
+  "EquipChoice.Closed": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkEquipChoice",
+    "custom_recognition_param": "closed",
+    "action": "DoNothing",
+    "max_hit": 1,
+    "timeout": 4500
+  },
   "EquipmentRead.ScanSlot": {
     "next": ["EquipmentRead.Pick"], "timeout": 3500, "pre_delay": 0, "post_delay": 0
   },

@@ -8,6 +8,7 @@ from maa.tasker import Tasker
 
 from .native import Frame
 from .read import clean, integer
+from .session import task_recognition
 
 
 class EquipmentChoice(CustomRecognition):
@@ -55,21 +56,8 @@ class EquipmentChoice(CustomRecognition):
 def choose_equipment_dialog(tasker: Tasker, headings: tuple[str, ...], options: dict[str, str],
                             expected_round: int) -> dict:
     recognition = EquipmentChoice(headings, options, expected_round)
-    entry = "EquipChoice.Start"
-    overrides = {entry: {"next": ["EquipChoice.Pick"], "timeout": 4500}}
-    for node, kind, following in (("Pick", "pick", ["Closed", "Confirm"]),
-                                  ("Confirm", "confirm", ["Closed"]), ("Closed", "closed", [])):
-        overrides[f"EquipChoice.{node}"] = {
-            "recognition": "Custom", "custom_recognition": "ArkEquipChoice", "custom_recognition_param": kind,
-            "action": "DoNothing" if kind == "closed" else "Click", "max_hit": 1, "timeout": 4500,
-            "next": [f"EquipChoice.{name}" for name in following],
-        }
-    if not tasker.resource.register_custom_recognition("ArkEquipChoice", recognition):
-        raise RuntimeError("Could not register equipment choice recognition")
-    try:
-        job = tasker.post_task(entry, overrides).wait()
-        if not job.succeeded or not recognition.result:
-            raise RuntimeError(f"Equipment dialog was not verified for {' / '.join(headings)}")
-        return recognition.result
-    finally:
-        tasker.resource.unregister_custom_recognition("ArkEquipChoice")
+    with task_recognition(tasker, "ArkEquipChoice", recognition):
+        job = tasker.post_task("EquipChoice.Start").wait()
+    if not job.succeeded or not recognition.result:
+        raise RuntimeError(f"Equipment dialog was not verified for {' / '.join(headings)}")
+    return recognition.result

@@ -15,6 +15,7 @@ from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load
 from .deploy import read_board, tile_point
 from .equipment_read import read_equipment_slots
 from .native import Frame
+from .session import task_recognition
 from .read import CATALOG, ROOT, Reader, clean, integer, read_json
 
 
@@ -191,15 +192,10 @@ def drag_equipment(tasker: Tasker, calibration: dict, item_slot: int, name: str,
         override["Equip.Lift"]["next"] = ["Equip.DestroyHover"]
     if opens_choice and not tracked:
         override["Equip.Drop"] = {"next": [terminal]}
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkEquip", recognition):
-        raise RuntimeError("Could not register the equip recognizer")
-    try:
+    with task_recognition(tasker, "ArkEquip", recognition):
         job = tasker.post_task(entry, override).wait()
         detail = job.get()
         nodes = [node.name for node in detail.nodes] if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkEquip")
     if not job.succeeded or not nodes or nodes[-1] != terminal or (not opens_choice and recognition.after is None):
         if {"Equip.Drop", "Equip.DropTracked", "Equip.DestroyDrop"}.intersection(nodes):
             raise RuntimeError("Equipment was released, but its expected postcondition was not verified")

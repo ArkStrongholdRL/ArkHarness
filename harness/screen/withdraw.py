@@ -11,6 +11,7 @@ from maa.tasker import Tasker
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .deploy import has_facing_marker, read_board, tile_point
 from .native import Frame
+from .session import task_recognition
 from .read import ROOT, clean, integer, read_json
 
 
@@ -115,15 +116,10 @@ def withdraw_board(tasker: Tasker, slots: dict, board: dict, name: str, row: int
     source = tile_point(board, row, col, view_name="normal")
     recognition = WithdrawRecognition(stage, source, tuple(hand_centers[hand_slot]), name, expected_round,
                                       stage_confirmed, summon=summon)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkWithdraw", recognition):
-        raise RuntimeError("Could not register the withdraw recognizer")
-    try:
+    with task_recognition(tasker, "ArkWithdraw", recognition):
         job = tasker.post_task("Withdraw.Board").wait()
         detail = job.get()
         nodes = [node.name for node in detail.nodes] if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkWithdraw")
     if not job.succeeded or not nodes or nodes[-1] != "Withdraw.Verified" or recognition.result is None:
         raise RuntimeError(f"Withdraw outcome unverified: {recognition.reason}")
     return {"stageId": stage, "name": name, "row": row, "col": col, "handSlot": hand_slot,

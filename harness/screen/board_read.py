@@ -11,6 +11,7 @@ from maa.tasker import Tasker
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .deploy import FACING_MARKERS, deployment_tiles, matches_facing, read_board, tile_point
 from .native import Frame
+from .session import task_recognition
 from .read import CATALOG, ROOT, Reader, chess_identity, integer, read_json
 
 
@@ -163,10 +164,7 @@ def find_board_piece(tasker: Tasker, reader: Reader, board: dict, tiles: list[tu
     recognition = BoardReadRecognition(reader, board["stageId"], points, known_layout={},
                                        field=board.get("deployField", "normal"))
     recognition.hud = expected_hud
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkBoardRead", recognition):
-        raise RuntimeError("Could not register board inspection")
-    try:
+    with task_recognition(tasker, "ArkBoardRead", recognition):
         for tile in tiles:
             recognition.tile = tile
             recognition.identity = None
@@ -179,8 +177,6 @@ def find_board_piece(tasker: Tasker, reader: Reader, board: dict, tiles: list[tu
             identity = recognition.identity
             if identity and expected_id in identity["candidateIds"]:
                 return tile
-    finally:
-        resource.unregister_custom_recognition("ArkBoardRead")
     raise RuntimeError(f"Merged operator {expected_id} was not found at any consumed tile: {tiles}")
 
 
@@ -194,17 +190,12 @@ def inspect_board_positions(tasker: Tasker, reader: Reader, board: dict, tiles: 
     points = {tile: tile_point(board, *tile, view_name="normal") for tile in tiles}
     recognition = BoardReadRecognition(reader, board["stageId"], points, known_layout={}, field=field)
     recognition.hud = hud
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkBoardRead", recognition):
-        raise RuntimeError("Could not register board inspection")
     observed = {}
-    try:
+    with task_recognition(tasker, "ArkBoardRead", recognition):
         for tile in tiles:
             recognition.tile, recognition.identity = tile, None
             require_terminal(tasker, "BoardRead.Inspect", "BoardRead.Closed", allow_empty=True)
             observed[tile] = recognition.identity
-    finally:
-        resource.unregister_custom_recognition("ArkBoardRead")
     return observed
 
 
@@ -230,9 +221,6 @@ def read_board_tiles(tasker: Tasker, reader: Reader, board: dict, *,
         raise ValueError("The saved layout must use calibrated board tiles")
     recognition = BoardReadRecognition(reader, stage, points, expected_facings, verified_up, expected_remaining,
                                        deploy_cap, known_layout, field)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkBoardRead", recognition):
-        raise RuntimeError("Could not register board inspection")
     pieces = {}
 
     def inspect(tile):
@@ -247,7 +235,7 @@ def read_board_tiles(tasker: Tasker, reader: Reader, board: dict, *,
         pieces[tile] = {"row": row, "col": col, "facing": directions[0] if len(directions) == 1 else None,
                         **recognition.identity}
 
-    try:
+    with task_recognition(tasker, "ArkBoardRead", recognition):
         try:
             require_terminal(tasker, "BoardRead.Scan", "BoardRead.Anchor")
         except RuntimeError as error:
@@ -268,8 +256,6 @@ def read_board_tiles(tasker: Tasker, reader: Reader, board: dict, *,
                 unread = [tile for tile in missing if tile not in pieces]
                 raise RuntimeError(f"Read {chess_count} saved board operators but HUD reports {expected}; "
                                    f"unread saved tiles: {unread}")
-    finally:
-        resource.unregister_custom_recognition("ArkBoardRead")
     ordered = [pieces[tile] for tile in candidates if tile in pieces]
     scanned_markers = ({(p["row"], p["col"]): (p["facing"],) for p in ordered}
                        if recognition.allow_missing else recognition.markers)

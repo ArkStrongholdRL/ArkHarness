@@ -10,6 +10,7 @@ from maa.tasker import Tasker
 
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .native import Frame
+from .session import task_recognition
 from .read import (
     CATALOG, ROOT, Reader, clean, expanded_shop_level, integer, read_json, shop_frozen,
     shop_confirm_box, shop_reward_choices, shop_upgrade_center, shop_upgrade_price,
@@ -74,13 +75,8 @@ def set_shop_open(tasker: Tasker, expanded: bool) -> dict:
     if type(expanded) is not bool:
         raise ValueError("The desired expanded state must be a boolean")
     recognition = ShopViewRecognition(expanded)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkShopView", recognition):
-        raise RuntimeError("Could not register the shop view recognizer")
-    try:
+    with task_recognition(tasker, "ArkShopView", recognition):
         job = tasker.post_task("Shop.SetView").wait()
-    finally:
-        resource.unregister_custom_recognition("ArkShopView")
     if not job.succeeded or recognition.result is None:
         raise RuntimeError("The requested shop view could not be verified")
     return recognition.result
@@ -285,15 +281,10 @@ def run_purchase(tasker: Tasker, reader: Reader, slot: int, *, entry: str,
     recognizer = RewardRecognition if reward else BuyRecognition
     recognition = recognizer(reader, slot, expected_id, expected_price, expected_round, **({"merge": True} if merge and not reward else {}))
     recognition.reward_kind = reward_kind
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkShopBuy", recognition):
-        raise RuntimeError("Could not register the shop purchase recognizer")
-    try:
+    with task_recognition(tasker, "ArkShopBuy", recognition):
         job = tasker.post_task(entry).wait()
         detail = job.get()
         nodes = [node.name for node in detail.nodes] if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkShopBuy")
     terminal = "Shop.Quoted" if entry == "Shop.Quote" else "Shop.BuyVerified"
     if job.succeeded and nodes and nodes[-1] == terminal and recognition.result is not None:
         return recognition.result
@@ -420,14 +411,9 @@ class ShopControlRecognition(CustomRecognition):
 def change_shop(tasker: Tasker, reader: Reader, action: str, *, frozen: bool | None = None) -> dict:
     if action not in CONTROLS or (action == "freeze" and type(frozen) is not bool):
         raise ValueError("Specify a shop action and an explicit desired freeze state for freeze")
-    resource = tasker.resource
     recognition = ShopControlRecognition(reader, action, frozen)
-    if not resource.register_custom_recognition("ArkShopControl", recognition):
-        raise RuntimeError("Could not register the shop control recognizer")
-    try:
+    with task_recognition(tasker, "ArkShopControl", recognition):
         job = tasker.post_task("Shop.Change").wait()
-    finally:
-        resource.unregister_custom_recognition("ArkShopControl")
     if job.succeeded and recognition.result is not None:
         return recognition.result
     if recognition.before is not None:

@@ -11,6 +11,7 @@ from maa.tasker import Tasker
 
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .native import Frame
+from .session import task_recognition
 from .read import CATALOG, clean, index_names, integer, read_json
 
 
@@ -96,15 +97,10 @@ class CommandRecognition(CustomRecognition):
 def inspect_command(tasker: Tasker, catalog: Path) -> dict:
     """Read the held command and verify return to the same preparation round."""
     recognition = CommandRecognition(catalog)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkCommand", recognition):
-        raise RuntimeError("Could not register command inspection")
-    try:
+    with task_recognition(tasker, "ArkCommand", recognition):
         job = tasker.post_task("Command.Inspect").wait()
         detail = job.get()
         last = detail.nodes[-1].name if detail and detail.nodes else ""
-    finally:
-        resource.unregister_custom_recognition("ArkCommand")
     if not job.succeeded or last != "Command.Closed" or recognition.result is None:
         raise RuntimeError("The command details or return to preparation could not be verified")
     return recognition.result

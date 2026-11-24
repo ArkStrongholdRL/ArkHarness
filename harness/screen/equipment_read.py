@@ -12,6 +12,7 @@ from maa.tasker import Tasker
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .native import Frame
 from .read import CATALOG, ROOT, Reader, catalog_identity, integer, read_json
+from .session import task_recognition
 from .shop import set_shop_open
 
 
@@ -65,28 +66,25 @@ def read_equipment_slots(tasker: Tasker, reader: Reader, indices: list[int] | No
         raise ValueError("Equipment slots must be unique")
 
     recognition = EquipmentReadRecognition(reader)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkEquipmentRead", recognition):
-        raise RuntimeError("Could not register equipment rack inspection")
     observations = []
     view = None
     try:
         view = set_shop_open(tasker, True)
         dx, dy = rack["liftOffset"]
-        for slot in selected:
-            recognition.slot, recognition.result = slot, None
-            x, y = centers[slot]
-            job = tasker.post_task("EquipmentRead.ScanSlot", {
-                "EquipmentRead.Pick": {"target": [x, y]},
-                "EquipmentRead.Lift": {"target": [x + dx, y + dy]},
-            }).wait()
-            detail = job.get()
-            last = detail.nodes[-1].name if detail and detail.nodes else ""
-            if not job.succeeded or last != "EquipmentRead.Restored" or recognition.result is None:
-                raise RuntimeError(f"Equipment slot {slot} or return from the drag could not be verified")
-            observations.append(recognition.result)
+        with task_recognition(tasker, "ArkEquipmentRead", recognition):
+            for slot in selected:
+                recognition.slot, recognition.result = slot, None
+                x, y = centers[slot]
+                job = tasker.post_task("EquipmentRead.ScanSlot", {
+                    "EquipmentRead.Pick": {"target": [x, y]},
+                    "EquipmentRead.Lift": {"target": [x + dx, y + dy]},
+                }).wait()
+                detail = job.get()
+                last = detail.nodes[-1].name if detail and detail.nodes else ""
+                if not job.succeeded or last != "EquipmentRead.Restored" or recognition.result is None:
+                    raise RuntimeError(f"Equipment slot {slot} or return from the drag could not be verified")
+                observations.append(recognition.result)
     finally:
-        resource.unregister_custom_recognition("ArkEquipmentRead")
         if view is not None and view["clicked"]:
             set_shop_open(tasker, False)
     current_round, funds = recognition.status

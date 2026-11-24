@@ -6,6 +6,27 @@ from threading import Lock
 from maa.custom_recognition import CustomRecognition
 
 
+SCREEN_RECOGNIZERS = (
+    "ArkBoardRead",
+    "ArkBriefing",
+    "ArkCommand",
+    "ArkCommander",
+    "ArkDeploy",
+    "ArkEquip",
+    "ArkEquipChoice",
+    "ArkEquipmentRead",
+    "ArkHand",
+    "ArkHandSale",
+    "ArkNavigation",
+    "ArkReadScreen",
+    "ArkSell",
+    "ArkShopBuy",
+    "ArkShopControl",
+    "ArkShopView",
+    "ArkWithdraw",
+)
+
+
 class _TaskRecognizer(CustomRecognition):
     def __init__(self):
         super().__init__()
@@ -18,7 +39,7 @@ class _TaskRecognizer(CustomRecognition):
 
 class SessionRecognizers:
     def __init__(self, resource):
-        self._recognizers = {name: _TaskRecognizer() for name in ("ArkNavigation", "ArkDeploy", "ArkReadScreen")}
+        self._recognizers = {name: _TaskRecognizer() for name in SCREEN_RECOGNIZERS}
         self._task_lock = Lock()
         for name, recognizer in self._recognizers.items():
             if not resource.register_custom_recognition(name, recognizer):

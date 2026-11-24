@@ -1,5 +1,5 @@
 """Static audit of resource/pipeline: defined nodes, references from JSON and Python, dead nodes."""
-import json, re, glob, sys
+import ast, json, re, glob, sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 defs = {}
@@ -48,8 +48,17 @@ by = {}
 for k, (f, v) in defs.items(): by.setdefault(json.dumps(v, sort_keys=True), []).append(k)
 print("identical definitions:", [v for v in by.values() if len(v) > 1])
 print("nodes with a custom recognition but no Python registration:")
-reg = set()
-for f in (ROOT / "harness").rglob("*.py"): reg |= set(re.findall(r'register_custom_recognition\(\s*"(\w+)"', f.read_text(encoding="utf-8", errors="ignore")))
+session = ast.parse((ROOT / "harness/screen/session.py").read_text(encoding="utf-8"))
+registry = next(node.value for node in session.body if isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == "SCREEN_RECOGNIZERS"
+                        for target in node.targets))
+reg = set(ast.literal_eval(registry))
+missing = []
 for k, (f, v) in defs.items():
     c = v.get("custom_recognition")
-    if c and c not in reg: print("  ", k, c)
+    if c and c not in reg:
+        missing.append((k, c))
+for k, c in missing:
+    print("  ", k, c)
+if missing:
+    sys.exit(1)

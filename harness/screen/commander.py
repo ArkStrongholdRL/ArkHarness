@@ -14,6 +14,7 @@ from PIL import Image
 
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .native import Frame
+from .session import task_recognition
 from .read import ROOT, clean, read_json
 
 
@@ -112,19 +113,14 @@ def run(tasker: Tasker, action: str, layouts: dict, slot: tuple[int, int] | None
 
 def run_pipeline(tasker: Tasker, action: str, recognition: CommanderRecognition,
                  expected_name: str | None = None) -> dict:
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkCommander", recognition):
-        raise RuntimeError("Could not register the commander recognizer")
     entry, terminal = ENTRIES[action]
     override = {}
     if expected_name:
         override = {"Commander.ExpectedName": {"expected": "^" + re.escape(expected_name) + "$"}}
-    try:
+    with task_recognition(tasker, "ArkCommander", recognition):
         job = tasker.post_task(entry, override).wait()
         detail = job.get()
         nodes = [node.name for node in detail.nodes] if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkCommander")
 
     if not job.succeeded or not nodes or nodes[-1] != terminal:
         if "Commander.ConfirmExpected" in nodes:

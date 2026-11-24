@@ -198,6 +198,8 @@ class NavigationRecognition(CustomRecognition):
 def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_ms: int, *,
                    checkpoint: str | None = None, scroll_preview: bool = False) -> None:
     entry, terminal = ENTRIES[recognition.action]
+    if recognition.action == "inspect-enemies" and scroll_preview:
+        entry = "ArkInspectEnemiesScrolled"
     override = {
         "ArkReadyOnce": {"timeout": timeout_ms},
         "ArkConfirmReady": {"timeout": timeout_ms},
@@ -205,9 +207,6 @@ def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_m
     }
     if recognition.action == "ready-battle":
         override["ArkBattleStarted"] = {"enabled": True}
-    if scroll_preview:
-        override["ArkOpenEnemyPreview"] = {"next": ["ArkScrollEnemyPreview"]}
-        override["ArkCloseEnemyPreview"] = {"custom_recognition_param": "enemyPreviewScrolled"}
     if checkpoint is not None:
         override["Entry.SavedMatch"] = {"enabled": True}
         override["Entry.SoloButton"] = {"expected": "^独立模拟$"}
