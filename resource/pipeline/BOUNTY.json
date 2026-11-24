@@ -1,0 +1,57 @@
+{
+  "Bounty.Screen": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "OCR", "roi": [165, 19, 215, 67], "expected": "悬[赏賞][决決]策"},
+      {"recognition": "OCR", "roi": [356, 21, 299, 43], "expected": "选定悬[赏賞]目标"}
+    ]
+  },
+  "Supply.Screen": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "OCR", "roi": [165, 19, 215, 67], "expected": "机密商店"},
+      {"recognition": "OCR", "roi": [356, 21, 299, 43], "expected": "获得装备补给"}
+    ]
+  },
+  "Bounty.NameLeft": {"recognition": "OCR", "roi": [279, 251, 178, 75]},
+  "Bounty.NameCenter": {"recognition": "OCR", "roi": [621, 251, 178, 75]},
+  "Bounty.NameRight": {"recognition": "OCR", "roi": [962, 251, 178, 75]},
+  "Bounty.DescriptionLeft": {"recognition": "OCR", "roi": [165, 330, 302, 103]},
+  "Bounty.DescriptionCenter": {"recognition": "OCR", "roi": [507, 330, 302, 103]},
+  "Bounty.DescriptionRight": {"recognition": "OCR", "roi": [847, 330, 302, 103]},
+  "Bounty.ConfirmLeft": {"recognition": "OCR", "roi": [165, 449, 302, 67], "expected": "^[☑✓✔]?\\s*确认选择$"},
+  "Bounty.ConfirmCenter": {"recognition": "OCR", "roi": [507, 449, 302, 67], "expected": "^[☑✓✔]?\\s*确认选择$"},
+  "Bounty.ConfirmRight": {"recognition": "OCR", "roi": [847, 449, 302, 67], "expected": "^[☑✓✔]?\\s*确认选择$"},
+  "Bounty.Select": {
+    "next": ["Bounty.ConfirmSlot", "Bounty.ClickSlot"],
+    "timeout": 4000
+  },
+  "Bounty.ClickSlot": {
+    "recognition": "And",
+    "all_of": ["Bounty.Screen", "Bounty.ExpectedOffer"],
+    "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["ArkReturnedRest", "Bounty.ConfirmSlot"],
+    "timeout": 15000
+  },
+  "Bounty.ConfirmSlot": {
+    "recognition": "And",
+    "all_of": ["Bounty.Screen", "Bounty.ExpectedConfirmation"],
+    "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["ArkReturnedRest"],
+    "timeout": 15000
+  },
+  "Bounty.ExpectedOffer": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkNavigation",
+    "custom_recognition_param": "bountyTarget"
+  },
+  "Bounty.ExpectedConfirmation": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkNavigation",
+    "custom_recognition_param": "bountyConfirm"
+  }
+}

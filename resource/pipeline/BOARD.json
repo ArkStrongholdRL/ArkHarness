@@ -1,0 +1,123 @@
+{
+  "Screen.Drag": {
+    "recognition": "Or",
+    "any_of": ["Screen.DragIcon", "Board.SellText"]
+  },
+  "Screen.DragIcon": {
+    "recognition": "TemplateMatch",
+    "template": "drag-sell-icon.png",
+    "roi": [1163, 548, 50, 51],
+    "threshold": 0.88
+  },
+  "Screen.OperatorDetails": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "OCR", "roi": [110, 281, 91, 44], "expected": "^攻击范围$"},
+      {"recognition": "OCR", "roi": [316, 318, 152, 33], "expected": "^生命$|^[0-9]+\\s*/\\s*[0-9]+$"}
+    ]
+  },
+  "Screen.StageM02": {
+    "recognition": "Or",
+    "any_of": ["Screen.StageM02Expanded", "Screen.StageM02Normal"]
+  },
+  "Screen.StageM02Expanded": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "TemplateMatch", "template": "stage-m02-expanded-rocks.png", "roi": [565, 96, 142, 58], "threshold": 0.90},
+      {"recognition": "TemplateMatch", "template": "stage-m02-expanded-pit.png", "roi": [711, 310, 150, 71], "threshold": 0.90}
+    ]
+  },
+  "Screen.StageM02Normal": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "TemplateMatch", "template": "stage-m02-normal-rocks.png", "roi": [598, 124, 157, 63], "threshold": 0.90},
+      {"recognition": "TemplateMatch", "template": "stage-m02-normal-pit.png", "roi": [773, 393, 183, 82], "threshold": 0.90}
+    ]
+  },
+  "Screen.StageM06": {
+    "recognition": "Or",
+    "any_of": [
+      {"recognition": "TemplateMatch", "template": "stage-m06-expanded.png", "roi": [498, 188, 148, 143], "threshold": 0.90},
+      {"recognition": "TemplateMatch", "template": "stage-m06-normal.png", "roi": [505, 246, 153, 153], "threshold": 0.90}
+    ]
+  },
+  "Screen.StageM04": {
+    "recognition": "Or",
+    "any_of": ["Screen.StageM04Expanded", "Screen.StageM04Normal"]
+  },
+  "Screen.StageM04Expanded": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "TemplateMatch", "template": "stage-m04-left-crates.png", "roi": [430, 125, 68, 86], "threshold": 0.92},
+      {"recognition": "TemplateMatch", "template": "stage-m04-right-crate.png", "roi": [769, 125, 94, 85], "threshold": 0.92}
+    ]
+  },
+  "Screen.StageM04Normal": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "TemplateMatch", "template": "stage-m04-normal-left.png", "roi": [434, 158, 170, 68], "threshold": 0.88},
+      {"recognition": "TemplateMatch", "template": "stage-m04-normal-right.png", "roi": [839, 158, 83, 94], "threshold": 0.91}
+    ]
+  },
+  "Screen.StageM12": {
+    "recognition": "Or",
+    "any_of": ["Screen.StageM12Expanded", "Screen.StageM12Normal"]
+  },
+  "Screen.StageM09": {
+    "recognition": "Or",
+    "any_of": ["Screen.StageM09Expanded", "Screen.StageM09Normal"]
+  },
+  "Screen.StageM05": {
+    "recognition": "Or", "any_of": ["Screen.StageM05Expanded", "Screen.StageM05Normal"]
+  },
+  "Screen.StageM05Expanded": {
+    "recognition": "And", "all_of": [
+      {"recognition": "TemplateMatch", "template": "stage-m05-expanded-planter.png", "roi": [636, 272, 78, 95], "threshold": 0.89},
+      {"recognition": "TemplateMatch", "template": "stage-m05-expanded-balloons.png", "roi": [766, 166, 77, 85], "threshold": 0.89}
+    ]
+  },
+  "Screen.StageM05Normal": {
+    "recognition": "And", "all_of": [
+      {"recognition": "TemplateMatch", "template": "stage-m05-normal-planter.png", "roi": [680, 340, 88, 107], "threshold": 0.89},
+      {"recognition": "TemplateMatch", "template": "stage-m05-normal-balloons.png", "roi": [837, 222, 82, 92], "threshold": 0.89}
+    ]
+  },
+  "Screen.StageM09Expanded": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "TemplateMatch", "template": "stage-m09-expanded-ice.png", "roi": [194, 207, 99, 114], "threshold": 0.87},
+      {"recognition": "TemplateMatch", "template": "stage-m09-expanded-crate.png", "roi": [836, 176, 99, 86], "threshold": 0.87}
+    ]
+  },
+  "Screen.StageM09Normal": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "TemplateMatch", "template": "stage-m09-normal-ice.png", "roi": [181, 232, 100, 129], "threshold": 0.87},
+      {"recognition": "TemplateMatch", "template": "stage-m09-normal-crate.png", "roi": [915, 221, 107, 96], "threshold": 0.87}
+    ]
+  },
+  "Screen.StageM12Expanded": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "TemplateMatch", "template": "stage-m12-expanded-fence.png", "roi": [633, 195, 90, 143], "threshold": 0.86},
+      {"recognition": "TemplateMatch", "template": "stage-m12-expanded-flowerbed.png", "roi": [773, 237, 90, 101], "threshold": 0.86}
+    ]
+  },
+  "Screen.StageM12Normal": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "TemplateMatch", "template": "stage-m12-normal-fence.png", "roi": [675, 232, 98, 180], "threshold": 0.86},
+      {"recognition": "TemplateMatch", "template": "stage-m12-normal-flowerbed.png", "roi": [841, 300, 109, 109], "threshold": 0.86}
+    ]
+  },
+  "Screen.DeployExpanded": {
+    "recognition": "OCR",
+    "roi": [1094, 376, 186, 31],
+    "expected": "剩余可放置角色"
+  },
+  "Screen.DeployCollapsed": {
+    "recognition": "OCR",
+    "roi": [1094, 452, 186, 31],
+    "expected": "剩余可放置角色"
+  }
+}

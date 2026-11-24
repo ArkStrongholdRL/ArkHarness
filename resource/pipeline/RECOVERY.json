@@ -1,0 +1,52 @@
+{
+  "Recovery.Notice": {
+    "recognition": "OCR",
+    "roi": [300, 295, 690, 75],
+    "expected": "请重新同步\\s*\\[TIME_OUT\\]"
+  },
+  "Recovery.Route": {
+    "next": ["Recovery.Returned", "Recovery.Acknowledge", "Recovery.Wake", "Recovery.OpenEvent", "Recovery.Resume"],
+    "timeout": 30000,
+    "rate_limit": 500
+  },
+  "Recovery.Acknowledge": {
+    "recognition": "And",
+    "all_of": [
+      "Recovery.Notice",
+      {"recognition": "ColorMatch", "roi": [618, 470, 44, 42], "method": 40,
+       "lower": [0, 0, 235], "upper": [179, 25, 255], "count": 400}
+    ],
+    "action": "Click", "target": [640, 492], "max_hit": 1,
+    "next": ["Recovery.Route"]
+  },
+  "Recovery.Wake": {
+    "recognition": "And",
+    "all_of": [
+      "Lifecycle.Title",
+      {"recognition": "OCR", "roi": [548, 461, 184, 91], "expected": "^开始唤醒$"}
+    ],
+    "action": "Click", "target": [640, 511], "max_hit": 1,
+    "next": ["Recovery.Route"]
+  },
+  "Recovery.OpenEvent": {
+    "recognition": "And", "all_of": ["Lifecycle.GameHome", "Entry.EventBanner"],
+    "action": "Click", "target": [1150, 237], "max_hit": 1,
+    "next": ["Recovery.Route"]
+  },
+  "Recovery.Resume": {
+    "recognition": "And",
+    "all_of": [
+      "Lifecycle.Entrance", "Recovery.SavedRound",
+      {"recognition": "OCR", "roi": [1090, 649, 177, 47], "expected": "^断线重连$"}
+    ],
+    "action": "Click", "target": [1120, 650], "max_hit": 1,
+    "next": ["Recovery.Returned"], "timeout": 60000,
+    "rate_limit": 500
+  },
+  "Recovery.SavedRound": {
+    "recognition": "Custom", "custom_recognition": "ArkNavigation", "custom_recognition_param": "recoverySavedRound"
+  },
+  "Recovery.Returned": {
+    "recognition": "Custom", "custom_recognition": "ArkNavigation", "custom_recognition_param": "recoveryReturned"
+  }
+}

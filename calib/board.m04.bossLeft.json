@@ -1,0 +1,83 @@
+{
+  "stageId": "act3autochess_m04",
+  "deployField": "bossLeft",
+  "groundGeometry": "board.json",
+  "views": {
+    "normal": {
+      "sample": "领袖准备界面/m04-boss-left.png",
+      "status": "measured",
+      "validationGround": [
+        [
+          9,
+          5,
+          640,
+          438
+        ],
+        [
+          9,
+          6,
+          729,
+          438
+        ],
+        [
+          9,
+          7,
+          818,
+          438
+        ],
+        [
+          9,
+          9,
+          992,
+          438
+        ],
+        [
+          10,
+          5,
+          638,
+          363
+        ],
+        [
+          10,
+          6,
+          723,
+          363
+        ],
+        [
+          10,
+          7,
+          808,
+          363
+        ],
+        [
+          11,
+          5,
+          637,
+          294
+        ],
+        [
+          11,
+          6,
+          719,
+          294
+        ],
+        [
+          11,
+          7,
+          801,
+          294
+        ]
+      ],
+      "residualPx": {
+        "rms": 1.58,
+        "max": 1.96
+      },
+      "heightCorrection": []
+    },
+    "drag": {
+      "status": "shared",
+      "geometryVerifiedOn": "act3autochess_m12",
+      "heightCorrection": []
+    }
+  }
+}

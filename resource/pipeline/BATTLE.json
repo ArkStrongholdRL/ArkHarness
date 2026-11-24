@@ -1,0 +1,99 @@
+{
+  "Battle.Active": {
+    "recognition": "And", "all_of": ["Battle.BadgeText", "Battle.BadgeColor", "ArkRoundNumber"]
+  },
+  "Battle.BadgeText": {
+    "recognition": "OCR", "roi": [609, 10, 99, 35],
+    "expected": "^开始作战$|^[0-9]+\\s*/\\s*[0-9]+$"
+  },
+  "Battle.BadgeColor": {
+    "recognition": "ColorMatch", "roi": [571, 7, 142, 44], "method": 40,
+    "lower": [8, 85, 135], "upper": [36, 255, 255], "count": 100
+  },
+  "Battle.LeaderActive": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "OCR", "roi": [454, 19, 73, 30], "only_rec": true, "expected": "^[0-9]+\\s*/\\s*[0-9]+$"},
+      {"recognition": "ColorMatch", "roi": [545, 20, 26, 27], "method": 40,
+       "lower": [0, 135, 140], "upper": [25, 255, 255], "count": 35}
+    ]
+  },
+  "Battle.Settlement": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "OCR", "roi": [594, 310, 231, 70], "expected": "^作战结束$"},
+      {"recognition": "Or", "any_of": [
+        {"recognition": "And", "all_of": ["Battle.BadgeColor", "ArkRoundNumber"]},
+        "Battle.LeaderActive"
+      ]}
+    ]
+  },
+  "ArkStartBattle": {
+    "next": ["ArkReadyOnce"],
+    "timeout": 6000,
+    "on_error": ["ArkUnexpectedScreen"]
+  },
+  "ArkReadyOnce": {
+    "recognition": "And",
+    "all_of": ["ArkReadyGraphic", "ArkRestText", "ArkReadyText", "ArkRememberRound"],
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "rate_limit": 650,
+    "timeout": 95000,
+    "next": ["ArkRestAfterBattle", "ArkBountyAfterBattle", "ArkMatchEnded", "ArkDisconnected", "ArkBattleStarted", "ArkConfirmReady"],
+    "on_error": ["ArkBattleNotVerified"]
+  },
+  "ArkConfirmReady": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "OCR", "roi": [521, 254, 237, 72], "expected": "确认准备吗"},
+      {"recognition": "OCR", "roi": [889, 441, 161, 85], "expected": "^确认$"}
+    ],
+    "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "rate_limit": 650,
+    "timeout": 95000,
+    "next": ["ArkRestAfterBattle", "ArkBountyAfterBattle", "ArkMatchEnded", "ArkDisconnected", "ArkBattleStarted"],
+    "on_error": ["ArkBattleNotVerified"]
+  },
+  "ArkWaitBattle": {
+    "next": ["ArkRestAfterBattle", "ArkBountyAfterBattle", "ArkMatchEnded", "ArkDisconnected"],
+    "rate_limit": 650, "timeout": 95000, "on_error": ["ArkBattleNotVerified"]
+  },
+  "ArkBattleStarted": {
+    "enabled": false,
+    "recognition": "And", "all_of": [
+      {"recognition": "Or", "any_of": ["Battle.Active", "Battle.LeaderActive"]}, "ArkStartedRound"
+    ]
+  },
+  "ArkRestAfterBattle": {
+    "recognition": "And",
+    "all_of": ["ArkRest", "ArkLaterRound", "ArkSnapshot"]
+  },
+  "ArkBountyAfterBattle": {
+    "recognition": "And", "all_of": [
+      {"recognition": "Or", "any_of": ["Bounty.Screen", "Supply.Screen"]}, "ArkSnapshot"
+    ]
+  },
+  "ArkMatchEnded": {
+    "recognition": "And", "all_of": ["Lifecycle.Interrupted", "Interrupt.HomeText", "ArkSnapshot"]
+  },
+  "ArkDisconnected": {
+    "recognition": "And", "all_of": ["Recovery.Notice", "ArkSnapshot"]
+  },
+  "ArkRememberRound": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkNavigation",
+    "custom_recognition_param": "rememberRound"
+  },
+  "ArkLaterRound": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkNavigation",
+    "custom_recognition_param": "laterRound"
+  },
+  "ArkStartedRound": {
+    "recognition": "Custom", "custom_recognition": "ArkNavigation", "custom_recognition_param": "startedRound"
+  },
+  "ArkBattleNotVerified": {"action": "StopTask"}
+}

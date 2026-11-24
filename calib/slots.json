@@ -1,0 +1,66 @@
+{
+  "imageSize": [1280, 720],
+  "sample": "主准备界面/01.png",
+  "buttons": {
+    "refresh": {"center": [1191, 458], "roi": [1116, 434, 148, 49]},
+    "upgrade": {"center": [387, 615], "roi": [331, 521, 112, 191]},
+    "freeze": {"center": [1043, 458], "roi": [970, 434, 146, 50]},
+    "ready": {"center": [1188, 115], "roi": [1115, 93, 148, 44]},
+    "matchInfo": {"center": [340, 34], "roi": [311, 19, 57, 30]},
+    "closeMatchInfo": {"screen": "matchInfo", "center": [1204, 44], "roi": [1179, 20, 49, 49]},
+    "enemyPreview": {"center": [943, 34], "roi": [916, 18, 61, 32]}
+  },
+  "commander": {
+    "gridPlain": {"columns": [718, 858, 998, 1138], "rows": [246, 387, 528, 666]},
+    "gridWithDetail": {"columns": [454, 594, 734, 874], "rows": [246, 387, 528, 666]}
+  },
+  "shop": {
+    "capacity": 10,
+    "layoutAliases": {"3": "2", "5": "4", "6": "4"},
+    "layouts": {
+      "1": [
+        {"screenIndex": 0, "engineIndex": 3, "kind": "item", "center": [528, 617], "nameROI": [480, 671, 115, 27], "tierROI": [459, 529, 20, 23], "priceROI": [514, 520, 26, 24], "soldROI": [482, 596, 92, 38]},
+        {"screenIndex": 1, "engineIndex": 0, "kind": "chess", "center": [690, 617], "nameROI": [642, 671, 115, 27], "tierROI": [621, 529, 20, 23], "priceROI": [676, 520, 26, 24], "soldROI": [644, 596, 92, 38]},
+        {"screenIndex": 2, "engineIndex": 1, "kind": "chess", "center": [852, 617], "nameROI": [805, 671, 115, 27], "tierROI": [783, 529, 20, 23], "priceROI": [838, 520, 26, 24], "soldROI": [806, 596, 92, 38]},
+        {"screenIndex": 3, "engineIndex": 2, "kind": "chess", "center": [1013, 617], "nameROI": [967, 671, 115, 27], "tierROI": [945, 529, 20, 23], "priceROI": [1000, 520, 26, 24], "soldROI": [967, 596, 92, 38]}
+      ],
+      "2": [
+        {"screenIndex": 0, "engineIndex": 4, "kind": "item", "center": [366, 617], "nameROI": [313, 671, 118, 27], "tierROI": [295, 529, 23, 24], "priceROI": [352, 520, 28, 24], "soldROI": [320, 596, 92, 38]},
+        {"screenIndex": 1, "engineIndex": 0, "kind": "chess", "center": [528, 617], "nameROI": [480, 671, 115, 27], "tierROI": [459, 529, 20, 23], "priceROI": [514, 520, 26, 24], "soldROI": [482, 596, 92, 38]},
+        {"screenIndex": 2, "engineIndex": 1, "kind": "chess", "center": [690, 617], "nameROI": [642, 671, 115, 27], "tierROI": [621, 529, 20, 23], "priceROI": [676, 520, 26, 24], "soldROI": [644, 596, 92, 38]},
+        {"screenIndex": 3, "engineIndex": 2, "kind": "chess", "center": [852, 617], "nameROI": [805, 671, 115, 27], "tierROI": [783, 529, 20, 24], "priceROI": [839, 520, 26, 24], "soldROI": [806, 596, 92, 38]},
+        {"screenIndex": 4, "engineIndex": 3, "kind": "chess", "center": [1013, 617], "nameROI": [967, 671, 115, 27], "tierROI": [945, 529, 20, 23], "priceROI": [1000, 520, 26, 24], "soldROI": [967, 596, 92, 38]}
+      ],
+      "4": [
+        {"screenIndex": 0, "engineIndex": 5, "kind": "item", "center": [207, 620], "nameROI": [154, 672, 119, 32], "tierROI": [135, 529, 24, 32], "priceROI": [196, 528, 22, 23], "soldROI": [160, 601, 94, 39]},
+        {"screenIndex": 1, "engineIndex": 0, "kind": "chess", "center": [369, 620], "nameROI": [317, 672, 119, 32], "tierROI": [297, 529, 24, 32], "priceROI": [358, 528, 22, 23], "soldROI": [322, 601, 94, 39]},
+        {"screenIndex": 2, "engineIndex": 1, "kind": "chess", "center": [531, 620], "nameROI": [479, 672, 119, 32], "tierROI": [459, 529, 24, 32], "priceROI": [520, 528, 22, 23], "soldROI": [484, 601, 94, 39]},
+        {"screenIndex": 3, "engineIndex": 2, "kind": "chess", "center": [693, 620], "nameROI": [642, 672, 119, 32], "tierROI": [620, 529, 24, 32], "priceROI": [681, 528, 22, 23], "soldROI": [646, 601, 94, 39]},
+        {"screenIndex": 4, "engineIndex": 3, "kind": "chess", "center": [855, 620], "nameROI": [805, 672, 119, 32], "tierROI": [782, 529, 24, 32], "priceROI": [843, 528, 22, 23], "soldROI": [808, 601, 94, 39]},
+        {"screenIndex": 5, "engineIndex": 4, "kind": "chess", "center": [1017, 620], "nameROI": [967, 672, 119, 32], "tierROI": [945, 529, 24, 32], "priceROI": [1004, 528, 22, 23], "soldROI": [970, 601, 94, 39]}
+      ]
+    }
+  },
+  "hand": {
+    "capacity": 10,
+    "status": "emptyBenchCenters",
+    "engineIndexByScreenIndex": [null, null, null, null, null, null, null, null, null, null],
+    "centersByView": {
+      "normal": [[139, 609], [238, 609], [339, 609], [438, 609], [539, 609], [638, 609], [737, 609], [837, 609], [937, 609], [1036, 609]],
+      "shopExpanded": [[187, 482], [269, 482], [350, 482], [430, 482], [511, 482], [593, 482], [675, 482], [758, 482], [840, 482], [923, 482]],
+      "drag": [[139, 609], [238, 609], [339, 609], [438, 609], [539, 609], [638, 609], [737, 609], [837, 609], [937, 609], [1036, 609]]
+    }
+  },
+  "sale": {
+    "boardDetailsButtonROI": [700, 315, 105, 50],
+    "priceROIFromButton": [45, -66, 56, 41]
+  },
+  "temp": {"capacity": 5, "slots": null},
+  "equipment": {
+    "centersByView": {
+      "shopExpanded": [[522, 402], [602, 402], [680, 402], [758, 402], [834, 402]]
+    },
+    "liftOffset": [5, 54],
+    "targetHighlightROI": [-51, -133, 57, 57]
+  }
+}

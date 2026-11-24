@@ -1,0 +1,41 @@
+{
+  "EquipmentRead.ScanSlot": {
+    "next": ["EquipmentRead.Pick"], "timeout": 3500, "pre_delay": 0, "post_delay": 0
+  },
+  "EquipmentRead.Pick": {
+    "recognition": "And", "all_of": ["ArkRestText", "Shop.Expanded", "EquipmentRead.Before"],
+    "action": "TouchDown", "pre_delay": 200, "max_hit": 1, "post_delay": 300,
+    "next": ["EquipmentRead.Lift"], "on_error": ["EquipmentRead.Cancel"]
+  },
+  "EquipmentRead.Lift": {
+    "action": "TouchMove", "pre_delay": 200, "max_hit": 1, "post_delay": 450,
+    "next": ["EquipmentRead.Held", "EquipmentRead.Empty"],
+    "timeout": 4000, "on_error": ["EquipmentRead.Cancel"]
+  },
+  "EquipmentRead.Held": {
+    "pre_delay": 0, "post_delay": 0,
+    "recognition": "And", "all_of": ["Equip.DragHint", "EquipmentRead.ReadName"],
+    "next": ["EquipmentRead.Cancel"]
+  },
+  "EquipmentRead.Empty": {
+    "pre_delay": 0, "post_delay": 0,
+    "recognition": "Custom", "custom_recognition": "ArkEquipmentRead", "custom_recognition_param": "empty",
+    "next": ["EquipmentRead.Cancel"]
+  },
+  "EquipmentRead.Cancel": {
+    "action": "TouchMove", "pre_delay": 200, "post_delay": 200, "target": [35, 690], "next": ["EquipmentRead.Release"]
+  },
+  "EquipmentRead.Release": {"action": "TouchUp", "pre_delay": 200, "post_delay": 200, "next": ["EquipmentRead.Restored"], "timeout": 3500},
+  "EquipmentRead.Restored": {
+    "pre_delay": 0, "post_delay": 0,
+    "recognition": "Custom", "custom_recognition": "ArkEquipmentRead", "custom_recognition_param": "restored"
+  },
+  "EquipmentRead.Before": {
+    "recognition": "Custom", "custom_recognition": "ArkEquipmentRead", "custom_recognition_param": "before"
+  },
+  "EquipmentRead.ReadName": {
+    "recognition": "Custom", "custom_recognition": "ArkEquipmentRead", "custom_recognition_param": "name"
+  },
+  "EquipmentRead.Name": {"recognition": "OCR", "roi": [12, 173, 210, 43]},
+  "EquipmentRead.Description": {"recognition": "OCR", "roi": [94, 446, 350, 230]}
+}

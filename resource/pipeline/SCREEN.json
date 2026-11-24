@@ -1,0 +1,11 @@
+{
+  "ReadScreen": {
+    "next": ["Screen.Read"],
+    "timeout": 3000
+  },
+  "Screen.Read": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkReadScreen"
+  },
+  "Screen.FullText": {"recognition": "OCR"}
+}

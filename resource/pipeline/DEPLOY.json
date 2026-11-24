@@ -1,0 +1,115 @@
+{
+  "Board.Deploy": {
+    "pre_delay": 0, "post_delay": 0,
+    "next": ["Board.DeployGuard", "Board.CloseShop"],
+    "timeout": 3000
+  },
+  "Board.CloseShop": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkDeploy",
+    "custom_recognition_param": "close",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["Board.DeployGuard"],
+    "timeout": 3500
+  },
+  "Board.DeployGuard": {
+    "pre_delay": 0, "post_delay": 0,
+    "recognition": "Custom",
+    "custom_recognition": "ArkDeploy",
+    "custom_recognition_param": "pick",
+    "next": ["Board.PickHand"]
+  },
+  "Board.PickHand": {
+    "action": "TouchDown",
+    "pre_delay": 0,
+    "post_delay": 300,
+    "max_hit": 1,
+    "next": ["Board.LiftHand"],
+    "on_error": ["Board.CancelMove"]
+  },
+  "Board.LiftHand": {
+    "action": "TouchMove",
+    "pre_delay": 0,
+    "post_delay": 350,
+    "max_hit": 1,
+    "next": ["Board.MoveToTile"],
+    "timeout": 3000,
+    "on_error": ["Board.CancelMove"]
+  },
+  "Board.MoveToTile": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkDeploy",
+    "custom_recognition_param": "carried",
+    "action": "TouchMove",
+    "pre_delay": 0,
+    "post_delay": 400,
+    "max_hit": 1,
+    "next": ["Board.ReleaseTarget"],
+    "timeout": 3000,
+    "on_error": ["Board.CancelMove"]
+  },
+  "Board.ReleaseTarget": {
+    "action": "TouchUp", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["Board.PlacementVerified", "Board.ChooseFacing"],
+    "timeout": 5000
+  },
+  "Board.ChooseFacing": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkDeploy",
+    "custom_recognition_param": "facing",
+    "action": "Swipe", "pre_delay": 200, "post_delay": 200,
+    "duration": 420,
+    "max_hit": 3,
+    "next": ["Board.PlacementVerified", "Board.ChooseFacing"],
+    "timeout": 5000
+  },
+  "Board.FacingCancel": {
+    "recognition": "Or",
+    "any_of": ["Board.FacingCancelIcon", "Board.FacingCancelText"]
+  },
+  "Board.FacingCancelIcon": {
+    "recognition": "TemplateMatch",
+    "template": "facing-cancel.png",
+    "roi": [275, 46, 790, 440],
+    "threshold": 0.92
+  },
+  "Board.FacingCancelText": {
+    "recognition": "OCR",
+    "roi": [275, 46, 790, 440],
+    "expected": "^点击取消$"
+  },
+  "Board.PlacementVerified": {
+    "pre_delay": 0, "post_delay": 0,
+    "recognition": "Custom",
+    "custom_recognition": "ArkDeploy",
+    "custom_recognition_param": "verify"
+  },
+  "Board.CancelMove": {
+    "action": "TouchMove", "pre_delay": 200, "post_delay": 200,
+    "next": ["Board.CancelDrag"]
+  },
+  "Board.CancelDrag": {
+    "action": "TouchUp", "pre_delay": 200, "post_delay": 200
+  },
+  "Board.CarriedName": {
+    "recognition": "OCR",
+    "roi": [12, 178, 228, 41]
+  },
+  "Board.OperatorLevel": {
+    "recognition": "OCR", "roi": [110, 216, 50, 32], "only_rec": true, "expected": "^[0-9]+$"
+  },
+  "Board.SellText": {
+    "recognition": "OCR",
+    "roi": [1113, 626, 151, 49],
+    "expected": "拖拽至此售出"
+  },
+  "Board.FacingMarker": {
+    "recognition": "ColorMatch",
+    "method": 40,
+    "lower": [16, 235, 235],
+    "upper": [20, 255, 255],
+    "count": 30
+  }
+}

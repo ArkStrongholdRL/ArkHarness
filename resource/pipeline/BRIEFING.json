@@ -1,0 +1,21 @@
+{
+  "Briefing.Inspect": {"next": ["Briefing.Read"], "timeout": 3500},
+  "Briefing.Read": {
+    "recognition": "Custom", "custom_recognition": "ArkBriefing", "custom_recognition_param": "read"
+  },
+  "Briefing.Select": {"next": ["Briefing.Confirm", "Briefing.Switch"], "timeout": 3500},
+  "Briefing.Switch": {
+    "recognition": "Custom", "custom_recognition": "ArkBriefing", "custom_recognition_param": "switch",
+    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1, "next": ["Briefing.Confirm"], "timeout": 3500
+  },
+  "Briefing.Confirm": {
+    "recognition": "Custom", "custom_recognition": "ArkBriefing", "custom_recognition_param": "confirm",
+    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1, "next": ["Briefing.Confirmed"], "timeout": 7000
+  },
+  "Briefing.Confirmed": {
+    "recognition": "And", "all_of": ["Lifecycle.Strategy"]
+  },
+  "Briefing.GroupButton": {
+    "recognition": "OCR", "expected": "^(选择|切换|选择此组|选择此盟约组|选择该组|切换至此组)$"
+  }
+}

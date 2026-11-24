@@ -1,0 +1,65 @@
+{
+  "Board.InspectSale": {
+    "next": ["Board.ReadSaleQuote", "Board.OpenSellDetails", "Board.SellCloseShop"],
+    "timeout": 3000
+  },
+  "Board.ReadSaleQuote": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkSell",
+    "custom_recognition_param": "quote"
+  },
+  "Board.Sell": {
+    "next": ["Board.ResetSellDetails", "Board.OpenSellDetails", "Board.SellCloseShop"],
+    "timeout": 3500
+  },
+  "Board.ResetSellDetails": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkSell",
+    "custom_recognition_param": "reset",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "target": [282, 96],
+    "max_hit": 1,
+    "next": ["Board.OpenSellDetails"],
+    "timeout": 3000
+  },
+  "Board.SellCloseShop": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkSell",
+    "custom_recognition_param": "close",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["Board.OpenSellDetails"],
+    "timeout": 3500
+  },
+  "Board.OpenSellDetails": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkSell",
+    "custom_recognition_param": "pick",
+    "action": "Click", "pre_delay": 200,
+    "max_hit": 1,
+    "post_delay": 400,
+    "next": ["Board.ClickSell"],
+    "timeout": 4000,
+    "on_error": ["Board.CancelSellDetails"]
+  },
+  "Board.CancelSellDetails": {
+    "recognition": "Custom", "custom_recognition": "ArkSell", "custom_recognition_param": "reset",
+    "action": "Click", "target": [850, 150], "post_delay": 200, "max_hit": 1
+  },
+  "Board.ClickSell": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkSell",
+    "custom_recognition_param": "quote",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["Board.SellVerified"],
+    "timeout": 5500
+  },
+  "Board.SellVerified": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkSell",
+    "custom_recognition_param": "verify"
+  },
+  "Board.SellButtonText": {"recognition": "OCR", "expected": "^出售$"},
+  "Board.SellButtonPrice": {"recognition": "OCR", "only_rec": true, "expected": "^[+＋]\\s*[0-9]+$"}
+}

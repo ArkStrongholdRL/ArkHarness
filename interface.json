@@ -1,0 +1,547 @@
+{
+  "interface_version": 2,
+  "name": "ArkHarness",
+  "label": "ArkHarness 卫戍协议读屏",
+  "version": "v0.1.0",
+  "description": "ArkHarness 的 MaaFramework 资源包，仅供调试（MaaDebugger 等）查看节点识别结果。harness 本身在 Python 里加载 resource/ 并注册自定义识别，不经过本文件。基准分辨率 1280×720（原始尺寸截图）。",
+  "controller": [
+    {
+      "name": "MuMu-Adb",
+      "label": "MuMu 12（ADB，1280×720 原始截图）",
+      "type": "Adb",
+      "display_raw": true
+    }
+  ],
+  "resource": [
+    {
+      "name": "ArkHarness",
+      "label": "ArkHarness",
+      "path": [
+        "./resource"
+      ]
+    }
+  ],
+  "group": [
+    {
+      "name": "probe",
+      "label": "纯识别（可单独运行）",
+      "default_expand": true
+    },
+    {
+      "name": "flow",
+      "label": "流程入口（依赖 Python 自定义识别）",
+      "default_expand": false
+    }
+  ],
+  "task": [
+    {
+      "name": "ReadScreen",
+      "label": "读屏：输出 ScreenState",
+      "entry": "ReadScreen",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkReadScreen。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/SCREEN.json"
+    },
+    {
+      "name": "ArkObserve",
+      "label": "导航：观察当前界面",
+      "entry": "ArkObserve",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkNavigation。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/NAVcommon.json"
+    },
+    {
+      "name": "ArkClosePanel",
+      "label": "导航：关闭面板回到准备界面",
+      "entry": "ArkClosePanel",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkNavigation。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/NAVcommon.json"
+    },
+    {
+      "name": "ArkInspectMatchInfo",
+      "label": "导航：打开本局信息",
+      "entry": "ArkInspectMatchInfo",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkNavigation。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/MATCHinfo.json"
+    },
+    {
+      "name": "ArkInspectEnemies",
+      "label": "导航：打开敌人预告",
+      "entry": "ArkInspectEnemies",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkNavigation。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/ENEMYwave.json"
+    },
+    {
+      "name": "ArkInspectBond",
+      "label": "导航：打开盟约详情",
+      "entry": "ArkInspectBond",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkNavigation（参数：盟约名）。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/BOND.json"
+    },
+    {
+      "name": "ArkStartBattle",
+      "label": "导航：准备就绪并核对开战",
+      "entry": "ArkStartBattle",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkNavigation；会点击「准备就绪」。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/BATTLE.json"
+    },
+    {
+      "name": "Entry.EnterLayout",
+      "label": "入口：从卫戍协议入口进入布阵",
+      "entry": "Entry.EnterLayout",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkNavigation；会点击。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/ENTRY.json"
+    },
+    {
+      "name": "Commander.Observe",
+      "label": "指挥官：读选择页",
+      "entry": "Commander.Observe",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkCommander。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/COMMANDER.json"
+    },
+    {
+      "name": "Commander.Preview",
+      "label": "指挥官：预览某格",
+      "entry": "Commander.Preview",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkCommander（参数：行列）；会点击。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/COMMANDER.json"
+    },
+    {
+      "name": "Commander.Confirm",
+      "label": "指挥官：确认",
+      "entry": "Commander.Confirm",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkCommander（参数：名字）；会点击。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/COMMANDER.json"
+    },
+    {
+      "name": "Shop.Buy",
+      "label": "商店：购买一格",
+      "entry": "Shop.Buy",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkShopBuy（参数：引擎槽位）；会买东西。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Board.Deploy",
+      "label": "棋盘：拖放一个干员",
+      "entry": "Board.Deploy",
+      "group": [
+        "flow"
+      ],
+      "description": "需要 ArkDeploy（参数：手牌格、格子、朝向）；会拖动。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/DEPLOY.json"
+    },
+    {
+      "name": "Screen.Drag",
+      "entry": "Screen.Drag",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOARD.json"
+    },
+    {
+      "name": "Screen.StageM06",
+      "entry": "Screen.StageM06",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOARD.json"
+    },
+    {
+      "name": "Screen.StageM04",
+      "entry": "Screen.StageM04",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOARD.json"
+    },
+    {
+      "name": "Screen.DeployExpanded",
+      "entry": "Screen.DeployExpanded",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOARD.json"
+    },
+    {
+      "name": "Screen.DeployCollapsed",
+      "entry": "Screen.DeployCollapsed",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOARD.json"
+    },
+    {
+      "name": "Screen.BondPanel",
+      "entry": "Screen.BondPanel",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOND.json"
+    },
+    {
+      "name": "Screen.BondUnderline",
+      "entry": "Screen.BondUnderline",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOND.json"
+    },
+    {
+      "name": "Screen.BondName",
+      "entry": "Screen.BondName",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOND.json"
+    },
+    {
+      "name": "Screen.BondLayers",
+      "entry": "Screen.BondLayers",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOND.json"
+    },
+    {
+      "name": "Screen.BondDetailName",
+      "entry": "Screen.BondDetailName",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOND.json"
+    },
+    {
+      "name": "Screen.BondDetailLayers",
+      "entry": "Screen.BondDetailLayers",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOND.json"
+    },
+    {
+      "name": "Screen.BondMembers",
+      "entry": "Screen.BondMembers",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/BOND.json"
+    },
+    {
+      "name": "Commander.GridPlain",
+      "entry": "Commander.GridPlain",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/COMMANDER.json"
+    },
+    {
+      "name": "Commander.GridWithDetail",
+      "entry": "Commander.GridWithDetail",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/COMMANDER.json"
+    },
+    {
+      "name": "Commander.Portrait",
+      "entry": "Commander.Portrait",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/COMMANDER.json"
+    },
+    {
+      "name": "Commander.SelectedName",
+      "entry": "Commander.SelectedName",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/COMMANDER.json"
+    },
+    {
+      "name": "Commander.SelectedBadge",
+      "entry": "Commander.SelectedBadge",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/COMMANDER.json"
+    },
+    {
+      "name": "Board.FinishFacing",
+      "entry": "Board.FinishFacing",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/DEPLOY.json"
+    },
+    {
+      "name": "Board.FacingCancelText",
+      "entry": "Board.FacingCancelText",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/DEPLOY.json"
+    },
+    {
+      "name": "Board.CarriedName",
+      "entry": "Board.CarriedName",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/DEPLOY.json"
+    },
+    {
+      "name": "Board.SellText",
+      "entry": "Board.SellText",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/DEPLOY.json"
+    },
+    {
+      "name": "Board.LegalTile",
+      "entry": "Board.LegalTile",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/DEPLOY.json"
+    },
+    {
+      "name": "Board.FacingMarker",
+      "entry": "Board.FacingMarker",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/DEPLOY.json"
+    },
+    {
+      "name": "Screen.EnemyPanel",
+      "entry": "Screen.EnemyPanel",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/ENEMYwave.json"
+    },
+    {
+      "name": "Screen.EnemyPreviewButton",
+      "entry": "Screen.EnemyPreviewButton",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/ENEMYwave.json"
+    },
+    {
+      "name": "Screen.EnemyNames",
+      "entry": "Screen.EnemyNames",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/ENEMYwave.json"
+    },
+    {
+      "name": "Lifecycle.Title",
+      "entry": "Lifecycle.Title",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/ENTRY.json"
+    },
+    {
+      "name": "Screen.MatchInfoButton",
+      "entry": "Screen.MatchInfoButton",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/MATCHinfo.json"
+    },
+    {
+      "name": "Screen.MatchInfoCross",
+      "entry": "Screen.MatchInfoCross",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/MATCHinfo.json"
+    },
+    {
+      "name": "Screen.EnabledBond",
+      "entry": "Screen.EnabledBond",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/MATCHinfo.json"
+    },
+    {
+      "name": "ArkRoundNumber",
+      "entry": "ArkRoundNumber",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/PREP.json"
+    },
+    {
+      "name": "Screen.ReadyIcon",
+      "entry": "Screen.ReadyIcon",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/PREP.json"
+    },
+    {
+      "name": "Screen.ReadyColor",
+      "entry": "Screen.ReadyColor",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/PREP.json"
+    },
+    {
+      "name": "Screen.Mode",
+      "entry": "Screen.Mode",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/PREP.json"
+    },
+    {
+      "name": "Screen.Life",
+      "entry": "Screen.Life",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/PREP.json"
+    },
+    {
+      "name": "Screen.Funds",
+      "entry": "Screen.Funds",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/PREP.json"
+    },
+    {
+      "name": "Screen.FullText",
+      "entry": "Screen.FullText",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SCREEN.json"
+    },
+    {
+      "name": "Shop.ConfirmBuyText",
+      "entry": "Shop.ConfirmBuyText",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Shop.CollapseText",
+      "entry": "Shop.CollapseText",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Shop.Expanded",
+      "entry": "Shop.Expanded",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Screen.ShopButtons",
+      "entry": "Screen.ShopButtons",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Screen.ShopLevelExpanded",
+      "entry": "Screen.ShopLevelExpanded",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Screen.ShopLevelCollapsed",
+      "entry": "Screen.ShopLevelCollapsed",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Screen.UpgradePrice",
+      "entry": "Screen.UpgradePrice",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Screen.RefreshPrice",
+      "entry": "Screen.RefreshPrice",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Screen.ShopCardName",
+      "entry": "Screen.ShopCardName",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Screen.ShopCardTier",
+      "entry": "Screen.ShopCardTier",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Screen.ShopCardPrice",
+      "entry": "Screen.ShopCardPrice",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    },
+    {
+      "name": "Screen.ShopSold",
+      "entry": "Screen.ShopSold",
+      "group": [
+        "probe"
+      ],
+      "description": "纯识别节点（不点击），可在调试器里对当前画面单独运行。来源：resource/pipeline/SHOP.json"
+    }
+  ]
+}

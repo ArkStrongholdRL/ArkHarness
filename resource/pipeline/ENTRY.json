@@ -1,0 +1,135 @@
+{
+  "Entry.EnterLayout": {
+    "next": ["Entry.Route"]
+  },
+  "Entry.Route": {
+    "next": ["ArkReturnedRest", "Entry.ClickEvent", "Entry.SavedMatch", "Entry.ClickSolo", "Entry.ClickStart", "Entry.BriefingCheckpoint",
+      "Entry.ClickBriefingReady", "Entry.CommanderRequired", "Entry.SquadCheckpoint", "Entry.ClickSquadReady"],
+    "rate_limit": 350,
+    "timeout": 45000
+  },
+  "Entry.OpenEvent": {"next": ["Entry.EventEntrance", "Entry.ClickEvent"], "timeout": 6000},
+  "Entry.ClickEvent": {
+    "recognition": "And", "all_of": ["Lifecycle.GameHome", "Entry.EventBanner"],
+    "box_index": 1, "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "next": ["Entry.Route"], "timeout": 20000
+  },
+  "Entry.EventEntrance": {"recognition": "And", "all_of": ["Lifecycle.Entrance", "ArkSnapshot"]},
+  "Lifecycle.GameHome": {
+    "recognition": "And", "all_of": [
+      {"recognition": "OCR", "roi": [882, 70, 168, 106], "expected": "^终端$"},
+      {"recognition": "OCR", "roi": [691, 305, 154, 68], "expected": "^编队$"}
+    ]
+  },
+  "Entry.EventBanner": {
+    "recognition": "OCR", "roi": [1024, 179, 256, 95], "expected": "^卫戍协议$"
+  },
+  "Entry.SavedMatch": {
+    "enabled": false, "recognition": "And", "all_of": ["Lifecycle.Entrance", "Entry.ResumeSoloText"]
+  },
+  "Entry.ResumeSoloText": {
+    "recognition": "OCR", "roi": [978, 597, 291, 107], "expected": "当前回合\\s*[0-9]+"
+  },
+  "Entry.NewSoloText": {
+    "recognition": "OCR", "roi": [978, 597, 291, 107], "expected": "^独立模拟$"
+  },
+  "Entry.ClickSolo": {
+    "recognition": "And",
+    "all_of": ["Lifecycle.Entrance", "Entry.SoloButton"],
+    "box_index": 1,
+    "action": "Click", "target": [1116, 647], "pre_delay": 200,
+    "max_hit": 1,
+    "post_delay": 700,
+    "next": ["Entry.Route"]
+  },
+  "Entry.SoloButton": {
+    "recognition": "OCR",
+    "roi": [978, 597, 291, 107],
+    "expected": "独立模拟|当前回合\\s*[0-9]+"
+  },
+  "Entry.ClickStart": {
+    "recognition": "And",
+    "all_of": ["Lifecycle.Difficulty", "Entry.StartButton"],
+    "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["Entry.Route"]
+  },
+  "Entry.StartButton": {
+    "recognition": "OCR",
+    "roi": [1000, 607, 265, 97],
+    "expected": "^开始模拟$"
+  },
+  "Entry.ClickBriefingReady": {
+    "recognition": "And",
+    "all_of": ["Lifecycle.Briefing", "Entry.ReadyButton"],
+    "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["Entry.Route"]
+  },
+  "Entry.BriefingCheckpoint": {
+    "enabled": false,
+    "recognition": "And", "all_of": ["Lifecycle.Briefing", "ArkSnapshot"]
+  },
+  "Entry.CommanderRequired": {
+    "recognition": "And",
+    "all_of": ["Lifecycle.Strategy", "ArkSnapshot"]
+  },
+  "Entry.SquadCheckpoint": {
+    "enabled": false,
+    "recognition": "And", "all_of": ["Lifecycle.Squad", "ArkSnapshot"]
+  },
+  "Entry.ClickSquadReady": {
+    "recognition": "And",
+    "all_of": ["Lifecycle.Squad", "Entry.ReadyButton"],
+    "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["Entry.WaitLayout"]
+  },
+  "Entry.WaitLayout": {
+    "next": ["ArkReturnedRest"],
+    "rate_limit": 500,
+    "timeout": 60000
+  },
+  "Entry.ReadyButton": {
+    "recognition": "OCR",
+    "roi": [965, 585, 304, 124],
+    "expected": "准备就绪"
+  },
+  "Lifecycle.Title": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "OCR", "roi": [548, 461, 184, 83], "expected": "^开始唤醒$"},
+      {"recognition": "OCR", "roi": [470, 380, 341, 68], "expected": "ARKNIGHTS"}
+    ]
+  },
+  "Lifecycle.Entrance": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "OCR", "roi": [923, 527, 158, 64], "expected": "^个人模拟$"},
+      {"recognition": "OCR", "roi": [978, 597, 291, 107], "expected": "独立模拟|当前回合\\s*[0-9]+"}
+    ]
+  },
+  "Lifecycle.Difficulty": {
+    "recognition": "OCR",
+    "roi": [1000, 9, 260, 65],
+    "expected": "请选择模拟难度"
+  },
+  "Lifecycle.Briefing": {
+    "recognition": "OCR",
+    "roi": [402, 5, 296, 66],
+    "expected": "确认本局信息"
+  },
+  "Lifecycle.Strategy": {
+    "recognition": "OCR",
+    "roi": [562, 7, 210, 64],
+    "expected": "选择策略"
+  },
+  "Lifecycle.Squad": {
+    "recognition": "OCR",
+    "roi": [519, 5, 275, 66],
+    "expected": "确定自选编队"
+  }
+}

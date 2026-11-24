@@ -1,0 +1,91 @@
+{
+  "Commander.Observe": {
+    "next": ["Commander.ReadPage"],
+    "timeout": 3000
+  },
+  "Commander.Preview": {
+    "next": ["Commander.ClickSlot"],
+    "timeout": 3200
+  },
+  "Commander.Confirm": {
+    "next": ["Commander.ConfirmExpected"],
+    "timeout": 3200
+  },
+  "Commander.ReadPage": {
+    "recognition": "And",
+    "all_of": ["Lifecycle.Strategy", "Commander.Snapshot"]
+  },
+  "Commander.ClickSlot": {
+    "recognition": "And",
+    "all_of": ["Lifecycle.Strategy", "Commander.Slot"],
+    "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["Commander.PreviewOpened"],
+    "timeout": 4000
+  },
+  "Commander.PreviewOpened": {
+    "recognition": "And",
+    "all_of": ["Lifecycle.Strategy", "Commander.ConfirmText", "Commander.SelectionChanged", "Commander.Snapshot"]
+  },
+  "Commander.ConfirmExpected": {
+    "recognition": "And",
+    "all_of": ["Lifecycle.Strategy", "Commander.ConfirmText", "Commander.ExpectedName"],
+    "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["Lifecycle.Squad"],
+    "timeout": 6500
+  },
+  "Commander.GridPlain": {
+    "recognition": "OCR",
+    "roi": [677, 111, 236, 76],
+    "expected": "泛用型策略"
+  },
+  "Commander.GridWithDetail": {
+    "recognition": "OCR",
+    "roi": [414, 111, 237, 76],
+    "expected": "泛用型策略"
+  },
+  "Commander.Portrait": {
+    "recognition": "TemplateMatch",
+    "template": "commander",
+    "threshold": 0.91,
+    "order_by": "Score"
+  },
+  "Commander.SelectedName": {
+    "recognition": "OCR",
+    "roi": [980, 359, 261, 42],
+    "only_rec": true
+  },
+  "Commander.ExpectedName": {
+    "recognition": "OCR",
+    "roi": [980, 359, 261, 42],
+    "only_rec": true,
+    "expected": "^$"
+  },
+  "Commander.ConfirmText": {
+    "recognition": "OCR",
+    "roi": [1024, 620, 241, 79],
+    "expected": "确认选择"
+  },
+  "Commander.SelectedBadge": {
+    "recognition": "OCR",
+    "expected": "^SELECTED$"
+  },
+  "Commander.Slot": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkCommander",
+    "custom_recognition_param": "slot"
+  },
+  "Commander.SelectionChanged": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkCommander",
+    "custom_recognition_param": "selection"
+  },
+  "Commander.Snapshot": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkCommander",
+    "custom_recognition_param": "snapshot"
+  }
+}

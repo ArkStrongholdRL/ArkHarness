@@ -1,0 +1,77 @@
+{
+  "HandSale.Run": {
+    "next": ["HandSale.Reset", "HandSale.CloseShop", "HandSale.Open"],
+    "timeout": 4000
+  },
+  "HandSale.Reset": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkHandSale",
+    "custom_recognition_param": "reset",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "target": [1030, 70],
+    "max_hit": 1,
+    "next": ["HandSale.CloseShop", "HandSale.Open"],
+    "timeout": 3500
+  },
+  "HandSale.CloseShop": {
+    "recognition": "And",
+    "all_of": ["ArkRestText", "Screen.ReadyIcon", "Shop.Expanded", "Shop.CollapseText"],
+    "box_index": 3,
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["HandSale.Open"],
+    "timeout": 3500
+  },
+  "HandSale.Open": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkHandSale",
+    "custom_recognition_param": "open",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["HandSale.Click", "HandSale.Dismiss"],
+    "timeout": 4000
+  },
+  "HandSale.Click": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkHandSale",
+    "custom_recognition_param": "sell",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["HandSale.Verified", "HandSale.CheckSlot"],
+    "timeout": 5000
+  },
+  "HandSale.Dismiss": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkHandSale",
+    "custom_recognition_param": "dismiss",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "target": [1030, 70],
+    "max_hit": 1,
+    "next": ["HandSale.Unchanged"],
+    "timeout": 3500
+  },
+  "HandSale.CheckSlot": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkHandSale",
+    "custom_recognition_param": "check",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["HandSale.Verified"],
+    "timeout": 3500
+  },
+  "HandSale.Verified": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkHandSale",
+    "custom_recognition_param": "verified"
+  },
+  "HandSale.Unchanged": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkHandSale",
+    "custom_recognition_param": "unchanged"
+  },
+  "HandSale.Button": {
+    "recognition": "OCR",
+    "roi": [530, 215, 240, 145],
+    "expected": "^出售$"
+  }
+}

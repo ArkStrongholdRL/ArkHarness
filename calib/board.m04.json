@@ -1,0 +1,9 @@
+{
+  "stageId": "act3autochess_m04",
+  "groundGeometry": "board.json",
+  "views": {
+    "normal": {"heightCorrection": []},
+    "shopExpanded": {"heightCorrection": []},
+    "drag": {"heightCorrection": []}
+  }
+}

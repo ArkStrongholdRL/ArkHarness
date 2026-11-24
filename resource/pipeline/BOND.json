@@ -1,0 +1,84 @@
+{
+  "ArkInspectBond": {
+    "next": ["ArkOpenBondDetail"],
+    "timeout": 6000,
+    "on_error": ["ArkUnexpectedScreen"]
+  },
+  "ArkOpenBondDetail": {
+    "recognition": "And",
+    "all_of": ["ArkRest", "ArkNamedBond", "ArkExpectedRound"],
+    "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["ArkCloseBondDetail"],
+    "timeout": 6000,
+    "on_error": ["ArkPanelNotFound"]
+  },
+  "ArkCloseBondDetail": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkNavigation",
+    "custom_recognition_param": "bondDetail",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["ArkReturnedRest"],
+    "timeout": 6000,
+    "on_error": ["ArkRestNotRecovered"]
+  },
+  "ArkNamedBond": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkNavigation",
+    "custom_recognition_param": "namedBond"
+  },
+  "Screen.BondPanel": {
+    "recognition": "TemplateMatch",
+    "template": "bond-members-icon.png",
+    "roi": [330, 199, 29, 31],
+    "threshold": 0.88
+  },
+  "Screen.BondUnderline": {
+    "recognition": "ColorMatch",
+    "roi": [200, 136, 880, 6],
+    "method": 40,
+    "lower": [72, 130, 100],
+    "upper": [105, 255, 255],
+    "connected": true,
+    "count": 75
+  },
+  "Screen.BondRing": {
+    "recognition": "TemplateMatch",
+    "template": "bond-ring-left.png",
+    "roi": [200, 64, 880, 49],
+    "threshold": 0.79,
+    "order_by": "Horizontal"
+  },
+  "Screen.BondName": {
+    "recognition": "OCR",
+    "roi": "Screen.BondRing",
+    "roi_offset": [-10, 48, 58, -26],
+    "only_rec": true
+  },
+  "Screen.BondLayers": {
+    "recognition": "OCR",
+    "roi": "Screen.BondRing",
+    "roi_offset": [18, 33, 2, -29],
+    "only_rec": true,
+    "replace": [["^[Oo]$", "0"]],
+    "expected": "^[0-9]+$"
+  },
+  "Screen.BondDetailName": {
+    "recognition": "OCR",
+    "roi": [329, 174, 78, 26],
+    "only_rec": true
+  },
+  "Screen.BondDetailLayers": {
+    "recognition": "OCR",
+    "roi": [924, 172, 84, 28],
+    "only_rec": true,
+    "expected": "^层数\\s*[0-9]+$"
+  },
+  "Screen.BondMembers": {
+    "recognition": "OCR",
+    "roi": [354, 202, 106, 24],
+    "only_rec": true
+  }
+}

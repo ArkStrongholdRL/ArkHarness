@@ -1,0 +1,35 @@
+{
+  "ArkObserve": {
+    "next": ["ArkSnapshot"],
+    "timeout": 6000,
+    "on_error": ["ArkUnexpectedScreen"]
+  },
+  "ArkClosePanel": {
+    "next": ["ArkReturnedRest", "ArkCloseMatchInfo", "ArkCloseEnemyPreview", "ArkCloseBondDetail", "Command.ClosePanel", "ArkCancelFacing"],
+    "timeout": 6000,
+    "on_error": ["ArkUnexpectedScreen"]
+  },
+  "ArkReturnedRest": {
+    "recognition": "And",
+    "all_of": ["ArkRest", "ArkSnapshot"]
+  },
+  "ArkCancelFacing": {
+    "recognition": "And", "all_of": ["Screen.Drag", "Board.FacingCancel"], "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "next": ["ArkReturnedRest"], "timeout": 4000
+  },
+  "ArkSnapshot": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkNavigation",
+    "custom_recognition_param": "snapshot"
+  },
+  "ArkUnexpectedScreen": {"action": "StopTask"},
+  "ArkPanelNotFound": {
+    "next": ["ArkReturnedRest", "ArkCloseMatchInfo", "ArkCloseEnemyPreview", "ArkCloseBondDetail", "Command.ClosePanel"],
+    "timeout": 3000
+  },
+  "ArkRestNotRecovered": {
+    "next": ["ArkReturnedRest"],
+    "timeout": 3000
+  }
+}

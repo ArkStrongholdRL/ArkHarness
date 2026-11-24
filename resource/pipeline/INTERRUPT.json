@@ -1,0 +1,71 @@
+{
+  "Interrupt.Leave": {
+    "next": ["Interrupt.SavedEntrance", "Interrupt.ConfirmLeave", "Interrupt.OpenLeave"], "timeout": 6000
+  },
+  "Interrupt.End": {
+    "next": [
+      "Interrupt.NewEntrance", "Interrupt.ReturnHome", "Interrupt.ConfirmAbandon",
+      "Interrupt.OpenAbandon", "Interrupt.ConfirmLeave", "Interrupt.OpenLeave"
+    ],
+    "timeout": 6000
+  },
+  "Interrupt.OpenLeave": {
+    "recognition": "And", "all_of": ["ArkRest", "ArkExpectedRound"],
+    "action": "Click", "pre_delay": 200, "post_delay": 200, "target": [59, 45], "max_hit": 1,
+    "next": ["Interrupt.ConfirmLeave"], "timeout": 6000
+  },
+  "Interrupt.ConfirmLeave": {
+    "recognition": "And", "all_of": ["Lifecycle.LeaveConfirm", "Interrupt.ConfirmText"],
+    "box_index": 1, "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "next": ["Interrupt.SavedEntrance"], "timeout": 18000
+  },
+  "Interrupt.ContinueToAbandon": {
+    "recognition": "And", "all_of": ["Lifecycle.Entrance", "Interrupt.SavedRound"],
+    "next": ["Interrupt.OpenAbandon"], "timeout": 5500
+  },
+  "Interrupt.OpenAbandon": {
+    "recognition": "And", "all_of": ["Lifecycle.Entrance", "Interrupt.SavedRound", "Interrupt.AbandonText"],
+    "box_index": 2, "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "next": ["Interrupt.ConfirmAbandon"], "timeout": 6000
+  },
+  "Interrupt.ConfirmAbandon": {
+    "recognition": "And", "all_of": ["Lifecycle.AbandonConfirm", "Interrupt.ConfirmText"],
+    "box_index": 1, "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "next": ["Interrupt.ReturnHome"], "timeout": 25000
+  },
+  "Interrupt.ReturnHome": {
+    "recognition": "And", "all_of": ["Lifecycle.Interrupted", "Interrupt.HomeText"],
+    "box_index": 1, "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "next": ["Interrupt.NewEntrance"], "timeout": 18000
+  },
+  "Interrupt.SavedEntrance": {
+    "recognition": "And", "all_of": ["Lifecycle.Entrance", "Interrupt.SavedRound", "ArkSnapshot"]
+  },
+  "Interrupt.NewEntrance": {
+    "recognition": "And", "all_of": ["Lifecycle.Entrance", "Entry.NewSoloText", "ArkSnapshot"]
+  },
+  "Interrupt.SavedRound": {
+    "recognition": "Custom", "custom_recognition": "ArkNavigation", "custom_recognition_param": "savedRound"
+  },
+  "Lifecycle.LeaveConfirm": {
+    "recognition": "OCR", "roi": [350, 283, 570, 76], "expected": "当前模拟记录将保留"
+  },
+  "Lifecycle.AbandonConfirm": {
+    "recognition": "OCR", "roi": [350, 283, 570, 76], "expected": "将以当前回合进行结算"
+  },
+  "Lifecycle.Interrupted": {
+    "recognition": "OCR", "roi": [148, 170, 272, 98], "expected": "^模拟中断$"
+  },
+  "Interrupt.AbandonText": {
+    "recognition": "OCR", "roi": [819, 621, 141, 63], "expected": "^放弃模拟$"
+  },
+  "Interrupt.ConfirmText": {
+    "recognition": "OCR", "roi": [916, 450, 150, 70], "expected": "^确认$"
+  },
+  "Interrupt.HomeText": {
+    "recognition": "OCR", "roi": [1024, 626, 202, 67], "expected": "^返回主页$"
+  },
+  "Result.PassedRounds": {
+    "recognition": "OCR", "roi": [103, 297, 135, 84], "only_rec": true, "expected": "^[0-9]+$"
+  }
+}

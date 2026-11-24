@@ -1,0 +1,36 @@
+{
+  "stageId": "act3autochess_m09",
+  "groundGeometry": "board.json",
+  "views": {
+    "normal": {
+      "heightCorrection": [
+        {
+          "row": 10,
+          "col": 6,
+          "dx": 0.0,
+          "dy": -12.0
+        }
+      ]
+    },
+    "shopExpanded": {
+      "heightCorrection": [
+        {
+          "row": 10,
+          "col": 6,
+          "dx": 0.0,
+          "dy": -10.0
+        }
+      ]
+    },
+    "drag": {
+      "heightCorrection": [
+        {
+          "row": 10,
+          "col": 6,
+          "dx": 0.0,
+          "dy": -12.0
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "ArkInspectEnemies": {
+    "next": ["ArkOpenEnemyPreview"],
+    "timeout": 6000,
+    "on_error": ["ArkUnexpectedScreen"]
+  },
+  "ArkOpenEnemyPreview": {
+    "recognition": "And",
+    "all_of": ["ArkEnemyPreviewButton", "ArkRest", "ArkExpectedRound"],
+    "action": "Click", "pre_delay": 200,
+    "max_hit": 1,
+    "post_wait_freezes": {"target": [746, 64, 432, 282], "time": 250, "rate_limit": 100, "threshold": 0.99, "timeout": 1800},
+    "post_delay": 350,
+    "next": ["ArkCloseEnemyPreview"],
+    "timeout": 6000,
+    "on_error": ["ArkPanelNotFound"]
+  },
+  "ArkCloseEnemyPreview": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkNavigation",
+    "custom_recognition_param": "enemyPreview",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["ArkReturnedRest"],
+    "timeout": 6000,
+    "on_error": ["ArkRestNotRecovered"]
+  },
+  "ArkScrollEnemyPreview": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkNavigation",
+    "custom_recognition_param": "enemyPreview",
+    "action": "Swipe", "pre_delay": 200,
+    "begin": [1110, 445],
+    "end": [1110, 210],
+    "duration": 320,
+    "post_delay": 350,
+    "max_hit": 1,
+    "next": ["ArkCloseEnemyPreview"],
+    "timeout": 6000
+  },
+  "ArkEnemyPreviewButton": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkNavigation",
+    "custom_recognition_param": "enemyPreviewButton"
+  },
+  "Screen.EnemyPanel": {
+    "recognition": "Or",
+    "any_of": ["Screen.EnemyPanelIcon", "Screen.EnemyPanelWithBounty", "Screen.EnemyPanelWithLeader"]
+  },
+  "Screen.EnemyPanelIcon": {
+    "recognition": "TemplateMatch",
+    "template": "enemy-header-icon.png",
+    "roi": [765, 75, 33, 38],
+    "threshold": 0.87
+  },
+  "Screen.EnemyPanelWithBounty": {
+    "recognition": "And",
+    "all_of": [
+      "Screen.EnemyPreviewButton",
+      {"recognition": "OCR", "roi": [790, 75, 75, 37], "expected": "^悬赏$"}
+    ]
+  },
+  "Screen.EnemyPanelWithLeader": {
+    "recognition": "And",
+    "all_of": [
+      "Screen.EnemyPreviewButton",
+      {"recognition": "OCR", "roi": [790, 75, 75, 37], "expected": "^领袖$"}
+    ]
+  },
+  "Screen.EnemyPreviewButton": {
+    "recognition": "ColorMatch",
+    "roi": [916, 18, 61, 32],
+    "method": 40,
+    "lower": [7, 125, 115],
+    "upper": [37, 255, 255],
+    "count": 25
+  },
+  "Screen.EnemyNames": {
+    "recognition": "OCR",
+    "roi": [849, 112, 321, 547]
+  },
+  "Screen.LeaderName": {
+    "recognition": "OCR",
+    "roi": [853, 112, 310, 37]
+  }
+}
