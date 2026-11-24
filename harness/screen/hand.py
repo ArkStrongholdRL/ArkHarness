@@ -9,7 +9,7 @@ from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
-from .native import Frame
+from .native import Frame, completed_data
 from .session import task_recognition
 from .read import CATALOG, ROOT, Reader, chess_identity, integer, read_json
 
@@ -39,18 +39,10 @@ class HandRecognition(CustomRecognition):
     def __init__(self, reader: Reader):
         super().__init__()
         self.reader = reader
-        self.stage = None
-        self.hud = None
-        self.slot = None
         self.center = None
-        self.result = None
+        self.anchor = None
 
-    def select_slot(self, slot: int) -> None:
-        self.slot = slot
-        self.center = self.reader.slots["hand"]["centersByView"]["normal"][slot]
-        self.result = None
-
-    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> tuple | None:
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | tuple | None:
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
@@ -71,28 +63,29 @@ class HandRecognition(CustomRecognition):
         if kind == "read":
             if board_details or (not hand_details and token is None):
                 return None
-            self.result = {"screenSlot": self.slot, "status": "occupied", **(token or chess_identity(self.reader, frame))}
-            return hit
-
-        hud = (
-            integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)"),
-            integer(frame.text("Screen.Funds")),
-            integer(frame.text("Screen.DeployCollapsed"), r"剩余可放置角色:([0-9]+)"),
-        )
-        if None in hud or (self.hud is not None and self.hud != hud):
-            return None
+            return self.AnalyzeResult(hit, {"status": "occupied", **(token or chess_identity(self.reader, frame))})
         if details:
             return None
-        stage = self.reader.stage_hint or frame.stage_id()
-        if stage is None or (self.stage is not None and stage != self.stage):
+        hud = {
+            "round": integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)"),
+            "funds": integer(frame.text("Screen.Funds")),
+            "remaining": integer(frame.text("Screen.DeployCollapsed"), r"剩余可放置角色:([0-9]+)"),
+            "stageId": self.reader.stage_hint or frame.stage_id(),
+        }
+        if None in hud.values() or (self.anchor is not None and self.anchor != hud):
             return None
         if kind == "pick":
-            self.stage, self.hud = stage, hud
-            return (*self.center, 1, 1)
+            return self.AnalyzeResult((*self.center, 1, 1), hud)
+        if completed_data(argv.task_detail.nodes, "Hand.Pick") != hud:
+            return None
         if kind == "empty":
-            self.result = {"screenSlot": self.slot, "status": "empty", "name": None,
-                           "id": None, "baseId": None, "candidateIds": []}
-        return hit
+            return self.AnalyzeResult(hit, {"status": "empty", "name": None, "id": None,
+                                            "baseId": None, "candidateIds": []})
+        if kind == "closed":
+            result = completed_data(argv.task_detail.nodes, "Hand.ReadDetails")
+            if result is not None:
+                return self.AnalyzeResult(hit, result)
+        return None
 
 
 def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, *,
@@ -102,7 +95,8 @@ def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, 
     skip_bare: slots whose tier badge is clearly absent are reported empty without a click (collapsed-shop view only).
     At least one slot is always clicked, which also reads the HUD (round, funds, remaining placements, stage).
     """
-    capacity = len(reader.slots["hand"]["centersByView"]["normal"])
+    centers = reader.slots["hand"]["centersByView"]["normal"]
+    capacity = len(centers)
     selected = list(range(capacity)) if indices is None else indices
     bare = []
     if skip_bare and indices is None:
@@ -116,23 +110,24 @@ def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, 
     if len(set(selected)) != len(selected):
         raise ValueError("Hand slots must be unique")
 
-    recognition = HandRecognition(reader)
+    anchor = None
     observations = []
+    recognition = HandRecognition(reader)
     with task_recognition(tasker, "ArkHand", recognition):
         for position, slot in enumerate(selected):
-            recognition.select_slot(slot)
-            override = {"Hand.Inspect": {"next": ["Hand.Pick"]}} if position else {}
-            job = tasker.post_task("Hand.Inspect", override).wait()
+            recognition.center, recognition.anchor = centers[slot], anchor
+            job = tasker.post_task("Hand.InspectNext" if position else "Hand.Inspect").wait()
             detail = job.get()
-            last = detail.nodes[-1].name if detail and detail.nodes else ""
-            if not job.succeeded or last not in ("Hand.Empty", "Hand.Closed") or recognition.result is None:
+            nodes = detail.nodes if detail else []
+            result = completed_data(nodes, "Hand.Empty", "Hand.Closed")
+            anchor = completed_data(nodes, "Hand.Pick")
+            if not job.succeeded or result is None or anchor is None:
                 raise RuntimeError(f"Hand slot {slot} or return to preparation could not be verified")
-            observations.append(recognition.result)
+            observations.append({"screenSlot": slot, **result})
     observations += [{"screenSlot": slot, "status": "empty", "name": None, "id": None, "baseId": None,
                       "candidateIds": []} for slot in bare]
     observations.sort(key=lambda row: row["screenSlot"])
-    return {"stageId": recognition.stage, "round": recognition.hud[0], "funds": recognition.hud[1],
-            "remaining": recognition.hud[2], "slots": observations}
+    return {**anchor, "slots": observations}
 
 
 def main() -> None:

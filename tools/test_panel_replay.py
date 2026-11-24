@@ -12,6 +12,7 @@ from harness.screen.capture import OCR_RESOURCE, load_ocr
 from harness.screen.command import inspect_command
 from harness.screen.equip_choice import choose_equipment_dialog
 from harness.screen.equipment_read import read_equipment_slots
+from harness.screen.hand import read_hand
 from harness.screen.read import CATALOG
 from tools.test_shop_replay import ReplayController
 
@@ -156,6 +157,30 @@ def equipment_rack():
     assert controller.clicks == [(500, 400)] and controller.moves == [(500, 300), (35, 690)]
 
 
+def hand_slots(tasker, controller):
+    reset(controller)
+    stage = "act3autochess_m02"
+    reader = SimpleNamespace(stage_hint=stage, slots={"hand": {"centersByView": {"normal": [[300, 600], [400, 600]]}}})
+    identity = {"id": "chess", "name": "干员", "kind": "chess", "candidateIds": ["chess"]}
+
+    def frame(_, image):
+        phase = int(image[0, 0, 0])
+        return SimpleNamespace(
+            scene=lambda: "preparation",
+            hit=lambda node: node == "ArkRestText" or (node == "HandSale.Button" and phase == 1),
+            text=lambda node: {"ArkRoundNumber": "回合9", "Screen.Funds": "4",
+                               "Screen.DeployCollapsed": "剩余可放置角色:2"}[node],
+        )
+
+    with (patch("harness.screen.hand.Frame", side_effect=frame),
+          patch("harness.screen.hand.chess_identity", return_value=identity)):
+        result = read_hand(tasker, reader, [0, 1])
+    assert (result["stageId"], result["round"], result["funds"], result["remaining"]) == (stage, 9, 4, 2)
+    assert result["slots"][0] == {"screenSlot": 0, "status": "occupied", **identity}
+    assert result["slots"][1]["screenSlot"] == 1 and result["slots"][1]["status"] == "empty"
+    assert controller.clicks == [(300, 600), (640, 495), (400, 600)]
+
+
 def main():
     Tasker.set_log_dir(Path("debug/mfw-panel-replay").resolve())
     Tasker.set_save_draw(False)
@@ -168,6 +193,7 @@ def main():
     command_details(tasker, controller)
     briefing_groups(tasker, controller)
     equipment_rack()
+    hand_slots(tasker, controller)
     print("MFW panel replay passed")
 
 
