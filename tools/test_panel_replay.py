@@ -7,7 +7,9 @@ from unittest.mock import patch
 from maa.tasker import Tasker
 
 from harness.screen.capture import OCR_RESOURCE, load_ocr
+from harness.screen.command import inspect_command
 from harness.screen.equip_choice import choose_equipment_dialog
+from harness.screen.read import CATALOG
 from tools.test_shop_replay import ReplayController
 
 
@@ -46,6 +48,24 @@ def equipment_choice(tasker, controller):
         assert controller.clicks == expected_clicks[:closes_after]
 
 
+def command_details(tasker, controller):
+    for phases in (["preparation", "commandDetails", "preparation"], ["commandDetails", "preparation"]):
+        reset(controller)
+
+        def frame(_, image):
+            scene = phases[int(image[0, 0, 0])]
+            return SimpleNamespace(
+                scene=lambda: scene, hit=lambda node: node == "ArkRestText",
+                rows=lambda node: [SimpleNamespace(box=PICK)] if node == "Command.View" else [],
+                text=lambda node: {"ArkRoundNumber": "回合9", "Screen.Funds": "4"}.get(node, ""),
+            )
+
+        with patch("harness.screen.command.Frame", side_effect=frame):
+            result = inspect_command(tasker, CATALOG)
+        assert result["round"] == 9 and result["funds"] == 4
+        assert controller.clicks == [(400, 200)] * (len(phases) - 1)
+
+
 def main():
     Tasker.set_log_dir(Path("debug/mfw-panel-replay").resolve())
     Tasker.set_save_draw(False)
@@ -55,6 +75,7 @@ def main():
     assert controller.post_connection().wait().succeeded
     tasker = load_ocr(controller, OCR_RESOURCE)
     equipment_choice(tasker, controller)
+    command_details(tasker, controller)
     print("MFW panel replay passed")
 
 

@@ -10,7 +10,7 @@ from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
-from .native import Frame
+from .native import Frame, completed_data
 from .session import task_recognition
 from .read import CATALOG, clean, index_names, integer, read_json
 
@@ -37,10 +37,8 @@ class CommandRecognition(CustomRecognition):
         self.bands = index_names(read_json(catalog / "bands.json"))
         self.effects = read_json(catalog / "effects.json")
         self.commands = command_choice_names(catalog)
-        self.before = None
-        self.result = None
 
-    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> tuple | None:
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | None:
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
@@ -51,21 +49,25 @@ class CommandRecognition(CustomRecognition):
         funds = integer(frame.text("Screen.Funds"))
         if current_round is None or funds is None:
             return None
-        state = (current_round, funds)
-        if self.before is not None and state != self.before:
-            return None
+        state = {"round": current_round, "funds": funds}
         kind = json.loads(argv.custom_recognition_param)
         if kind == "closed":
-            return (0, 0, 1, 1) if scene == "preparation" and self.result is not None else None
-        if (kind == "read") != (scene == "commandDetails"):
+            read = completed_data(argv.task_detail.nodes, "Command.ReadClose")
+            if scene != "preparation" or read is None or read["state"] != state:
+                return None
+            return self.AnalyzeResult((0, 0, 1, 1), read["command"])
+        if (kind, scene) not in {("read", "commandDetails"), ("open", "preparation")}:
             return None
         labels = frame.rows("Command.View")
         if len(labels) != 1 or frame.hit("Screen.OperatorDetails"):
             return None
-        self.before = state
         if kind == "read":
-            self.result = {"round": current_round, "funds": funds, **self.details(frame)}
-        return tuple(labels[0].box)
+            opened = completed_data(argv.task_detail.nodes, "Command.Open")
+            if opened is not None and opened["state"] != state:
+                return None
+            return self.AnalyzeResult(tuple(labels[0].box),
+                                      {"state": state, "command": {**state, **self.details(frame)}})
+        return self.AnalyzeResult(tuple(labels[0].box), {"state": state})
 
     def details(self, frame: Frame) -> dict:
         name = clean(frame.text("Command.Name"))
@@ -99,11 +101,11 @@ def inspect_command(tasker: Tasker, catalog: Path) -> dict:
     recognition = CommandRecognition(catalog)
     with task_recognition(tasker, "ArkCommand", recognition):
         job = tasker.post_task("Command.Inspect").wait()
-        detail = job.get()
-        last = detail.nodes[-1].name if detail and detail.nodes else ""
-    if not job.succeeded or last != "Command.Closed" or recognition.result is None:
+    detail = job.get()
+    result = completed_data(detail.nodes, "Command.Closed") if detail else None
+    if not job.succeeded or result is None:
         raise RuntimeError("The command details or return to preparation could not be verified")
-    return recognition.result
+    return result
 
 
 def main() -> None:
