@@ -95,7 +95,7 @@
       "group": [
         "flow"
       ],
-      "description": "需要 ArkNavigation；会点击「准备就绪」。自定义识别只在 harness 的 Python 进程里注册，调试器里单独运行会在该节点失败；用于查看前面节点的识别框。来源：resource/pipeline/BATTLE.json"
+      "description": "需要 Harness 注册 ArkNavigation 识别和 ArkRememberAndClickReady 动作。会点击「准备就绪」。来源：resource/pipeline/BATTLE.json"
     },
     {
       "name": "Entry.EnterLayout",

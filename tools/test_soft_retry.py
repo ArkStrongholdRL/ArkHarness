@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import numpy as np
+from maa.define import CustomRecognitionResult
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from harness.catalog import load
 from harness.checkpoint import load_checkpoint, restore_track, save_checkpoint
@@ -14,7 +15,7 @@ from harness.live import Live, GameState, Retry, Stop, RETRY_LIMIT
 from harness.rules import Rules
 from harness.layout import plan_layout
 from harness.layout_recovery import recover_layout_step
-from harness.screen.flow import NavigationRecognition, execute
+from harness.screen.flow import NavigationRecognition, ReadyAction, execute
 from harness.screen.deploy import DeployRecognition, read_board
 from harness.screen.board_read import read_board_tiles
 from harness.screen.equip import equipment_funds_match
@@ -35,7 +36,7 @@ def register_once(name, callback):
     return True
 
 
-resource = types.SimpleNamespace(register_custom_recognition=register_once)
+resource = types.SimpleNamespace(register_custom_recognition=register_once, register_custom_action=register_once)
 session_tasker = types.SimpleNamespace(screen_recognizers=SessionRecognizers(resource))
 navigation = registered_recognizers["ArkNavigation"]
 for expected in (1, 2):
@@ -195,8 +196,29 @@ nav.started_round = 12
 args = types.SimpleNamespace(image=np.zeros((720, 1280, 3), dtype=np.uint8),
                              custom_recognition_param='"startedRound"')
 with patch("harness.screen.flow.Frame", return_value=types.SimpleNamespace(text=lambda name: "回合12")):
-    assert nav.analyze(None, args) is not None
-require_return("ready-battle", {"round": 12}, nav.snapshot)
+    observed = nav.analyze(None, args)
+assert nav.snapshot is None
+require_return("ready-battle", {"round": 12}, observed.detail["snapshot"])
+
+# A ready round becomes battle state only when MFW confirms delivery of the click.
+ready_nav = NavigationRecognition({}, "ready-battle", None, None)
+ready_box = (899, 649, 2, 2)
+ready_detail = types.SimpleNamespace(hit=True, best_result=CustomRecognitionResult(ready_box, {"readyRound": 12}))
+ready_args = types.SimpleNamespace(box=ready_box, reco_detail=ready_detail)
+ready_clicks = []
+
+
+def click_ready(node, box):
+    ready_clicks.append((node, box))
+    return types.SimpleNamespace(success=len(ready_clicks) == 2)
+
+
+ready = ReadyAction(ready_nav)
+ready_context = types.SimpleNamespace(run_action=click_ready)
+assert not ready.run(ready_context, ready_args)
+assert ready_nav.started_round is None
+assert ready.run(ready_context, ready_args)
+assert ready_nav.started_round == 12 and ready_clicks == [("ArkClickReady", ready_box)] * 2
 
 # A deployment guard reads the starting HUD even when touch input has not begun.
 deployment = DeployRecognition("act3autochess_m02", (940, 610), "角峰", (636, 232), (636, 231), "RIGHT",
@@ -260,7 +282,7 @@ assert {piece.id for piece in live.track.hand if piece} == {live.gd.golden_id_of
 assert live.state.tactic_upgrades["chess"] == 0
 assert live.apply_confirmed_gain(ACT["BUY"], shop_state, base_id)
 assert {piece.id for piece in live.track.hand if piece} == {base_id, live.gd.golden_id_of(base_id)}
-assert nav.snapshot == {"screen": "battle", "round": 12, "canReady": False}
+assert observed.detail["snapshot"] == {"screen": "battle", "round": 12, "canReady": False}
 
 # A transition animation can hide the battle badge during the next passive observation.
 def battle_frames(tasker, recognition, timeout):

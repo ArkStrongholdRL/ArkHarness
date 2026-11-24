@@ -47,17 +47,16 @@ print("unreachable from any Python entry:", sorted(set(defs) - seen))
 by = {}
 for k, (f, v) in defs.items(): by.setdefault(json.dumps(v, sort_keys=True), []).append(k)
 print("identical definitions:", [v for v in by.values() if len(v) > 1])
-print("nodes with a custom recognition but no Python registration:")
 session = ast.parse((ROOT / "harness/screen/session.py").read_text(encoding="utf-8"))
-registry = next(node.value for node in session.body if isinstance(node, ast.Assign)
-                and any(isinstance(target, ast.Name) and target.id == "SCREEN_RECOGNIZERS"
-                        for target in node.targets))
-reg = set(ast.literal_eval(registry))
-missing = []
-for k, (f, v) in defs.items():
-    c = v.get("custom_recognition")
-    if c and c not in reg:
-        missing.append((k, c))
+registrations = {target.id: node.value for node in session.body if isinstance(node, ast.Assign)
+                 for target in node.targets if isinstance(target, ast.Name)}
+registered = {
+    "custom_recognition": set(ast.literal_eval(registrations["SCREEN_RECOGNIZERS"])),
+    "custom_action": {ast.literal_eval(registrations["READY_ACTION"])},
+}
+print("nodes with an unregistered custom callback:")
+missing = [(name, node[key]) for name, (_, node) in defs.items()
+           for key, allowed in registered.items() if key in node and node[key] not in allowed]
 for k, c in missing:
     print("  ", k, c)
 if missing:

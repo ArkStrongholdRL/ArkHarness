@@ -36,13 +36,14 @@
   "ArkReadyOnce": {
     "recognition": "And",
     "all_of": ["ArkReadyGraphic", "ArkRestText", "ArkReadyText", "ArkRememberRound"],
-    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "action": "Custom", "custom_action": "ArkRememberAndClickReady", "pre_delay": 200, "post_delay": 200,
     "max_hit": 1,
     "rate_limit": 650,
     "timeout": 95000,
     "next": ["ArkRestAfterBattle", "ArkBountyAfterBattle", "ArkMatchEnded", "ArkDisconnected", "ArkBattleStarted", "ArkConfirmReady"],
     "on_error": ["ArkBattleNotVerified"]
   },
+  "ArkClickReady": {"action": "Click"},
   "ArkConfirmReady": {
     "recognition": "And",
     "all_of": [

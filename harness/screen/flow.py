@@ -6,7 +6,9 @@ from pathlib import Path
 
 import numpy as np
 from maa.context import Context
+from maa.custom_action import CustomAction
 from maa.custom_recognition import CustomRecognition
+from maa.define import AndRecognitionResult, CustomRecognitionResult, OrRecognitionResult
 from maa.tasker import Tasker
 
 from ..wave import match_preview
@@ -52,6 +54,33 @@ ERRORS = {
 ENTRY_CHECKPOINTS = {"briefing": "Entry.BriefingCheckpoint", "squadSelection": "Entry.SquadCheckpoint"}
 
 
+def recognition_data(detail):
+    if detail is not None and detail.hit:
+        result = detail.best_result
+        if isinstance(result, CustomRecognitionResult) and isinstance(result.detail, dict):
+            yield result.detail
+        elif isinstance(result, (AndRecognitionResult, OrRecognitionResult)):
+            for child in result.sub_results:
+                yield from recognition_data(child)
+
+
+class ReadyAction(CustomAction):
+    def __init__(self, navigation):
+        super().__init__()
+        self.navigation = navigation
+
+    def run(self, context, argv):
+        round_number = next((data["readyRound"] for data in recognition_data(argv.reco_detail)
+                             if "readyRound" in data), None)
+        if round_number is None:
+            return False
+        click = context.run_action("ArkClickReady", argv.box)
+        if click is None or not click.success:
+            return False
+        self.navigation.started_round = round_number
+        return True
+
+
 class NavigationRecognition(CustomRecognition):
     def __init__(self, buttons: dict, action: str, bond: str | None, reader: Reader | None,
                  expected_round: int | None = None, *, bounty: tuple[int, str] | None = None):
@@ -73,13 +102,31 @@ class NavigationRecognition(CustomRecognition):
         x, y = self.buttons[name]["center"]
         return x, y, 1, 1
 
-    def panel_hit(self, frame: Frame, action: str, target: tuple) -> tuple:
+    def panel_result(self, frame: Frame, action: str, target: tuple):
         if self.action == action and self.reader is not None:
             try:
-                self.inspection = self.reader.read(frame)
+                return self.AnalyzeResult(target, {"inspection": self.reader.read(frame)})
             except (OSError, RuntimeError, ValueError) as error:
-                self.inspection_error = str(error)
+                return self.AnalyzeResult(target, {"inspectionError": str(error)})
         return target
+
+    def collect_results(self, nodes):
+        self.snapshot = self.stage_id = self.inspection = self.inspection_error = None
+        for node in nodes:
+            if not node.completed:
+                continue
+            for data in recognition_data(node.recognition):
+                if "snapshot" in data:
+                    self.snapshot = data["snapshot"]
+                    self.stage_id = data.get("stageId")
+                if "inspection" in data:
+                    self.inspection = data["inspection"]
+                if "inspectionError" in data:
+                    self.inspection_error = data["inspectionError"]
+                if "scrolledEnemies" in data and self.inspection is not None:
+                    kinds, ambiguous = data["scrolledEnemies"]
+                    self.inspection["enemyKinds"] = sorted(set(self.inspection["enemyKinds"]) | set(kinds))
+                    self.inspection["ambiguousEnemyNames"].update(ambiguous)
 
     @staticmethod
     def selected_bond(frame: Frame) -> tuple[int, int, int, int] | None:
@@ -95,7 +142,7 @@ class NavigationRecognition(CustomRecognition):
                       if clean(frame.text("Screen.BondName", roi=box)) == self.bond]
         return (candidates[0], 89, 1, 1) if len(candidates) == 1 else None
 
-    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> tuple | None:
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | tuple | None:
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
@@ -116,10 +163,7 @@ class NavigationRecognition(CustomRecognition):
                 and (current in (self.expected_round, self.expected_round + 1) or snapshot.get("leaderBattle"))
             )
             next_draft = screen in DRAFT_SCREENS and current in (None, self.expected_round + 1)
-            if same_match or next_draft:
-                self.snapshot = snapshot
-                return hit
-            return None
+            return self.AnalyzeResult(hit, {"snapshot": snapshot}) if same_match or next_draft else None
         if kind in {"bountyTarget", "bountyConfirm"} and self.reader is not None and self.bounty is not None:
             slot, card_id = self.bounty
             equipment = self.action == "select-equipment"
@@ -145,7 +189,7 @@ class NavigationRecognition(CustomRecognition):
         if kind == "closeMatchInfo":
             if not frame.hit("Screen.MatchInfoCross"):
                 return None
-            return self.panel_hit(frame, "inspect-info", self.point(kind))
+            return self.panel_result(frame, "inspect-info", self.point(kind))
         if kind in ("expectedRound", "rememberRound", "laterRound", "startedRound"):
             current = integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)")
             if kind == "laterRound":
@@ -155,44 +199,47 @@ class NavigationRecognition(CustomRecognition):
                 if self.started_round is not None and (
                     current == self.started_round or current is None and frame.hit("Battle.LeaderActive")
                 ):
-                    self.snapshot = {"screen": "battle", "round": self.started_round, "canReady": False}
+                    snapshot = {"screen": "battle", "round": self.started_round, "canReady": False}
                     if current is None:
-                        self.snapshot["leaderBattle"] = True
-                    return hit
+                        snapshot["leaderBattle"] = True
+                    return self.AnalyzeResult(hit, {"snapshot": snapshot})
                 return None
             if current is None or self.expected_round is not None and current != self.expected_round:
                 return None
             if kind == "rememberRound":
-                self.started_round = current
+                return self.AnalyzeResult(hit, {"readyRound": current})
             return hit
 
-        if kind == "enemyPreviewScrolled" and self.inspection is not None and self.reader is not None:
-            kinds, ambiguous = self.reader.read_enemy_kinds(frame)
-            self.inspection["enemyKinds"] = sorted(set(self.inspection["enemyKinds"]) | set(kinds))
-            self.inspection["ambiguousEnemyNames"].update(ambiguous)
-            return self.point("enemyPreview")
+        if kind == "enemyPreviewScrolled":
+            first_page_read = any(
+                "inspection" in data
+                for node in argv.task_detail.nodes if node.name == "ArkScrollEnemyPreview" and node.completed
+                for data in recognition_data(node.recognition)
+            )
+            if first_page_read and self.reader is not None:
+                return self.AnalyzeResult(self.point("enemyPreview"),
+                                          {"scrolledEnemies": self.reader.read_enemy_kinds(frame)})
+            return None
 
+        if kind == "namedBond":
+            return self.named_bond(frame)
+        if kind == "snapshot":
+            snapshot = screen_snapshot(frame)
+            if snapshot.get("leaderBattle") and self.started_round is not None:
+                snapshot["round"] = self.started_round
+            stage = frame.stage_id() if snapshot["screen"] == "preparation" else None
+            return self.AnalyzeResult(hit, {"snapshot": snapshot, "stageId": stage})
         screen = frame.scene()
         if kind == "preparation":
             return hit if screen == "preparation" else None
         if kind == "ready":
             return self.point("ready") if screen == "preparation" and frame.hit("Screen.ReadyColor") else None
-        if kind == "namedBond":
-            return self.named_bond(frame)
         if kind == "enemyPreview":
-            return self.panel_hit(frame, "inspect-enemies", self.point(kind)) if screen == kind else None
+            return self.panel_result(frame, "inspect-enemies", self.point(kind)) if screen == kind else None
         if kind == "bondDetail":
             target = self.selected_bond(frame) if screen == kind else None
-            return self.panel_hit(frame, "inspect-bond", target) if target else None
-        if kind != "snapshot":
-            return None
-
-        self.snapshot = screen_snapshot(frame)
-        if self.snapshot.get("leaderBattle") and self.started_round is not None:
-            self.snapshot["round"] = self.started_round
-        if self.snapshot["screen"] == "preparation":
-            self.stage_id = frame.stage_id()
-        return hit
+            return self.panel_result(frame, "inspect-bond", target) if target else None
+        return None
 
 
 def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_ms: int, *,
@@ -215,10 +262,12 @@ def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_m
         if checkpoint == "briefing":
             override["Entry.BriefingCheckpoint"] = {"enabled": True}
             override["Entry.ClickBriefingReady"] = {"enabled": False}
-    with task_recognition(tasker, "ArkNavigation", recognition):
+    ready_action = ReadyAction(recognition) if recognition.action in {"start-battle", "ready-battle"} else None
+    with task_recognition(tasker, "ArkNavigation", recognition, ready_action=ready_action):
         job = tasker.post_task(entry, override).wait()
         detail = job.get()
         steps = detail.nodes if detail else []
+    recognition.collect_results(steps)
     nodes = [node.name for node in steps]
     last = nodes[-1] if nodes else ""
     recognition.steps = nodes
