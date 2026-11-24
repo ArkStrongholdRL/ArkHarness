@@ -16,6 +16,7 @@ from harness.screen.commander import CommanderRecognition, run as run_commander,
 from harness.screen.equip_choice import choose_equipment_dialog
 from harness.screen.equipment_read import read_equipment_slots
 from harness.screen.hand import read_hand
+from harness.screen.hand_sale import sell_hand
 from harness.screen.read import CATALOG
 from tools.test_shop_replay import ReplayController
 
@@ -227,6 +228,31 @@ def commander_preview(tasker, controller):
         tasker.resource.unregister_custom_recognition("ReplayCommander")
 
 
+def hand_sale(tasker, controller):
+    slots = {"hand": {"centersByView": {"normal": [[300, 600]]}}}
+    for inspect, price in ((True, 2), (False, 2), (False, 0)):
+        reset(controller)
+
+        def frame(_, image):
+            phase = int(image[0, 0, 0])
+            funds = 4 if inspect or phase < 2 else 4 + price
+            texts = {"ArkRoundNumber": "回合9", "Screen.Funds": str(funds), "Board.SellButtonPrice": f"+{price}"}
+            rows = {"HandSale.Button": [SimpleNamespace(box=PICK)], "Board.CarriedName": [SimpleNamespace(text="干员")]}
+            return SimpleNamespace(
+                scene=lambda: "overlay" if not inspect and price and phase >= 2 else "preparation",
+                hit=lambda node: node == "ArkRestText",
+                text=lambda node, **_: texts[node],
+                rows=lambda node: rows[node] if phase == 1 else [],
+            )
+
+        with patch("harness.screen.hand_sale.Frame", side_effect=frame):
+            result = sell_hand(tasker, slots, 0, "干员", inspect=inspect, expected_price=price)
+        assert result["price"] == price and result["before"] == {"round": 9, "funds": 4}
+        assert result["after"] == {"round": 9, "funds": 4 + (0 if inspect else price)}
+        clicks = [(300, 600), (1030, 70) if inspect else (400, 200)]
+        assert controller.clicks == (clicks if inspect or price else [*clicks, (300, 600)])
+
+
 def main():
     Tasker.set_log_dir(Path("debug/mfw-panel-replay").resolve())
     Tasker.set_save_draw(False)
@@ -241,6 +267,7 @@ def main():
     equipment_rack()
     hand_slots(tasker, controller)
     commander_preview(tasker, controller)
+    hand_sale(tasker, controller)
     print("MFW panel replay passed")
 
 
