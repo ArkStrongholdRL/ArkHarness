@@ -17,7 +17,7 @@ from PIL import Image
 
 from .bounty import SLOTS as BOUNTY_SLOTS, BountyCatalog
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
-from .native import Frame, OfflineController
+from .native import Frame, OfflineController, completed_data
 from .session import task_recognition
 
 
@@ -514,27 +514,26 @@ class ScreenRecognition(CustomRecognition):
     def __init__(self, reader: Reader):
         super().__init__()
         self.reader = reader
-        self.state = None
-        self.error = None
 
     def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg):
+        hit = (0, 0, 1, 1)
         if argv.image.shape != (720, 1280, 3):
-            self.error = f"Expected a 1280×720 BGR screenshot, got {argv.image.shape}"
-            return (0, 0, 1, 1)
+            return self.AnalyzeResult(hit, {"error": f"Expected a 1280×720 BGR screenshot, got {argv.image.shape}"})
         try:
-            self.state = self.reader.read(Frame(context, argv.image))
+            return self.AnalyzeResult(hit, {"state": self.reader.read(Frame(context, argv.image))})
         except (OSError, RuntimeError, ValueError) as error:
-            self.error = str(error)
-        return (0, 0, 1, 1)
+            return self.AnalyzeResult(hit, {"error": str(error)})
 
 
 def read_screen(tasker: Tasker, reader: Reader) -> dict:
     recognition = ScreenRecognition(reader)
     with task_recognition(tasker, "ArkReadScreen", recognition):
         job = tasker.post_task("ReadScreen").wait()
-    if not job.succeeded or recognition.state is None:
-        raise RuntimeError(recognition.error or "MaaFramework ReadScreen did not return a ScreenState")
-    return recognition.state
+    detail = job.get()
+    result = completed_data(detail.nodes, "Screen.Read") if detail else None
+    if not job.succeeded or result is None or result.get("state") is None:
+        raise RuntimeError((result or {}).get("error") or "MaaFramework ReadScreen did not return a ScreenState")
+    return result["state"]
 
 
 def main() -> None:
