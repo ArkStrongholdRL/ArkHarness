@@ -3,7 +3,6 @@
 import argparse
 import json
 from pathlib import Path
-from time import monotonic
 
 from maa.context import Context
 from maa.custom_recognition import CustomRecognition
@@ -15,9 +14,9 @@ from .native import Frame
 from .read import CATALOG, ROOT, clean, integer, read_json
 
 
-FACING_RETRY_SECONDS = 0.9  # minimum gap before swiping the direction picker again
 FACING_OFFSETS = {"UP": (0, -182), "RIGHT": (182, 0), "DOWN": (0, 182), "LEFT": (-182, 0)}
 FACING_MARKERS = {"UP": (0, -19), "RIGHT": (34, 4), "DOWN": (0, 25), "LEFT": (-34, 4)}
+PLACEMENT_TERMINALS = {"Board.PlacementVerified", "Board.PlacementWithoutSwipe"}
 
 
 def read_board(path: Path) -> dict:
@@ -89,9 +88,6 @@ class DeployRecognition(CustomRecognition):
         self.stage_confirmed = stage_confirmed
         self.round = None
         self.remaining = None
-        self.facing_picker_seen = False
-        self.facing_swipes = 0
-        self.last_facing = None
         self.result = None
         self.reason = "The calibrated preparation view was not recognized"
 
@@ -107,18 +103,10 @@ class DeployRecognition(CustomRecognition):
             if self.facing_picker_open(frame) and any(
                 clean(row.text) == self.name for row in frame.rows("Board.CarriedName")
             ):
-                # The game sometimes ignores a swipe that starts while the picker is still appearing. The picker is still
-                # open (name and cancel label verified), so swiping again is safe, but not before the previous one has settled.
-                now = monotonic()
-                if self.last_facing is not None and now - self.last_facing < FACING_RETRY_SECONDS:
-                    return None
-                self.last_facing = now
-                self.facing_swipes += 1
-                self.facing_picker_seen = True
                 return x, y, 1, 1
             self.reason = "The direction picker for the requested tile and operator was not recognized"
             return None
-        return self.preparation(context, frame, kind)
+        return self.preparation(frame, kind)
 
     def facing_picker_open(self, frame: Frame) -> bool:
         x, y = self.target
@@ -134,7 +122,7 @@ class DeployRecognition(CustomRecognition):
         x, y = self.target
         return x, y, 1, 1
 
-    def preparation(self, context: Context, frame: Frame, kind: str) -> tuple | None:
+    def preparation(self, frame: Frame, kind: str) -> tuple | None:
         if kind == "verify" and self.facing_picker_open(frame):
             self.reason = "The direction picker is still open"
             return None
@@ -165,13 +153,11 @@ class DeployRecognition(CustomRecognition):
             if self.remaining is None or current_round != self.round or self.remaining - remaining != delta:
                 self.reason = f"After release, round={current_round}, remaining capacity={remaining}"
                 return None
-            direction_confirmed = (self.facing_picker_seen if self.stage_confirmed
-                                   else matches_facing(frame, self.normal_target, self.facing))
-            if not direction_confirmed:
+            if not self.stage_confirmed and not matches_facing(frame, self.normal_target, self.facing):
                 self.reason = "The direction was not set in the requested tile's picker"
                 return None
             self.result = {"round": current_round, "remainingBefore": self.remaining,
-                           "remainingAfter": remaining, "facing": self.facing, "facingSwipes": self.facing_swipes}
+                           "remainingAfter": remaining, "facing": self.facing}
             return (0, 0, 1, 1)
         if kind != "pick":
             return None
@@ -183,14 +169,6 @@ class DeployRecognition(CustomRecognition):
             return None
         self.round, self.remaining = current_round, remaining
         x, y = self.source
-        updates = {
-            "Board.PickHand": {"target": [x, y]},
-            "Board.LiftHand": {"target": [x, y - 80]},
-            "Board.CancelMove": {"target": [35, 675] if self.from_board else [x, y]},
-        }
-        if not context.override_pipeline(updates):
-            self.reason = "MaaFramework refused the source gesture coordinates"
-            return None
         return x, y, 1, 1
 
 
@@ -219,6 +197,10 @@ def matches_facing(frame: Frame, target: tuple[int, int], facing: str) -> bool:
             and frame.hit("Board.FacingMarker", roi=[x + 12, y - 22, 14, 12], count=4))
 
 
+def completed_facing_swipes(nodes) -> int:
+    return sum(node.name == "Board.ChooseFacing" and node.action is not None and node.action.success for node in nodes)
+
+
 def place_operator(tasker: Tasker, board: dict, stages: dict, source: tuple[int, int],
                    name: str, row: int, col: int, facing: str, *, from_board: bool = False,
                    expected_round: int | None = None, stage_confirmed: bool = False) -> dict:
@@ -234,6 +216,7 @@ def place_operator(tasker: Tasker, board: dict, stages: dict, source: tuple[int,
     x, y = tile_point(board, row, col)
     direction = facing_override((x, y), facing)
     normal_target = tile_point(board, row, col, view_name="normal")
+    source_x, source_y = source
     recognition = DeployRecognition(stage, source, name, (x, y), normal_target, facing,
                                     from_board=from_board, expected_round=expected_round,
                                     stage_confirmed=stage_confirmed)
@@ -242,18 +225,25 @@ def place_operator(tasker: Tasker, board: dict, stages: dict, source: tuple[int,
         raise RuntimeError("Could not register the deployment recognizer")
     try:
         job = tasker.post_task("Board.Deploy", {
+            "Board.PickHand": {"target": [source_x, source_y]},
+            "Board.LiftHand": {"target": [source_x, source_y - 80]},
+            "Board.CancelMove": {"target": [35, 675] if from_board else [source_x, source_y]},
             "Board.MoveToTile": {"target": [x, y]},
             "Board.ChooseFacing": direction,
+            "Board.PlacementWithoutSwipe": {"enabled": not stage_confirmed},
         }).wait()
         detail = job.get()
-        nodes = [node.name for node in detail.nodes] if detail else []
+        nodes = detail.nodes if detail else []
     finally:
         resource.unregister_custom_recognition("ArkDeploy")
-    if job.succeeded and nodes and nodes[-1] == "Board.PlacementVerified" and recognition.result:
-        return {"name": name, "stageId": stage, "row": row, "col": col, **recognition.result}
-    if "Board.ReleaseTarget" in nodes:
-        raise RuntimeError(f"A release was attempted; placement is unverified after {recognition.facing_swipes} direction swipe(s): {recognition.reason}")
-    if "Board.PickHand" in nodes:
+    names = [node.name for node in nodes]
+    swipes = completed_facing_swipes(nodes)
+    if (job.succeeded and names and names[-1] in PLACEMENT_TERMINALS
+            and recognition.result and (swipes or not stage_confirmed)):
+        return {"name": name, "stageId": stage, "row": row, "col": col, **recognition.result, "facingSwipes": swipes}
+    if "Board.ReleaseTarget" in names:
+        raise RuntimeError(f"A release was attempted; placement is unverified after {swipes} direction swipe(s): {recognition.reason}")
+    if "Board.PickHand" in names:
         raise RuntimeError(f"No tile release was sent; drag recovery requested: {recognition.reason}")
     raise RuntimeError(f"No deployment gesture was sent: {recognition.reason}")
 

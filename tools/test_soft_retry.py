@@ -15,6 +15,7 @@ from harness.rules import Rules
 from harness.layout import plan_layout
 from harness.layout_recovery import recover_layout_step
 from harness.screen.flow import NavigationRecognition, execute
+from harness.screen.deploy import DeployRecognition
 from harness.screen.equip import equipment_funds_match
 from harness.screen.holdings import reconcile_holdings
 from harness.screen.read import CATALOG, Reader, expanded_shop_level, read_json, shop_reward_choices
@@ -153,6 +154,16 @@ args = types.SimpleNamespace(image=np.zeros((720, 1280, 3), dtype=np.uint8),
 with patch("harness.screen.flow.Frame", return_value=types.SimpleNamespace(text=lambda name: "回合12")):
     assert nav.analyze(None, args) is not None
 require_return("ready-battle", {"round": 12}, nav.snapshot)
+
+# A deployment guard reads the starting HUD even when touch input has not begun.
+deployment = DeployRecognition("act3autochess_m02", (940, 610), "角峰", (636, 232), (636, 231), "RIGHT",
+                               expected_round=9, stage_confirmed=True)
+hud = types.SimpleNamespace(scene=lambda: "preparation", hit=lambda name, **_: name == "ArkRestText",
+                            text=lambda name: {"ArkRoundNumber": "回合9", "Screen.DeployCollapsed": "剩余可放置角色:1"}[name])
+with patch("harness.screen.deploy.Frame", return_value=hud):
+    assert deployment.analyze(None, types.SimpleNamespace(image=args.image, custom_recognition_param='"pick"')) == (
+        940, 610, 1, 1)
+assert (deployment.round, deployment.remaining) == (9, 1)
 
 # A tactical draft with its round HUD covered is a valid post-battle destination.
 tactic_screen = {"screen": "tacticSelection", "round": None, "canReady": False}

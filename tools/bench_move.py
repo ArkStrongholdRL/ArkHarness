@@ -51,7 +51,12 @@ if a.delays:
     ov = {"Board.PickHand": {"post_delay": d[0]}, "Board.LiftHand": {"post_delay": d[1]}, "Board.MoveToTile": {"post_delay": d[2]},
           "Board.ReleaseTarget": {"post_delay": d[3]}, "Board.ChooseFacing": {"duration": d[4], "post_delay": d[5]}}
     orig = deploy.Tasker.post_task
-    def post(self, entry, o=None): return orig(self, entry, {**(o or {}), **ov} if entry == "Board.Deploy" else o)
+    def post(self, entry, overrides=None):
+        if entry == "Board.Deploy":
+            overrides = dict(overrides or {})
+            for node, settings in ov.items():
+                overrides[node] = {**overrides.get(node, {}), **settings}
+        return orig(self, entry, overrides)
     deploy.Tasker.post_task = post
 print("trial delays", a.delays or "default", flush=True)
 for i in range(a.trials):
