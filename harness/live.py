@@ -42,6 +42,7 @@ from .prep_holdings import ITEM_GRANTS, prep_read_plan, scheduled_rack_slot
 from .rules import Rules
 from .sidecar import Sidecar, SidecarError
 from .track import Track
+from .wave import resolve_leader_names
 
 ROOT = Path(__file__).resolve().parent.parent
 LOGS = ROOT / "logs" / "live"
@@ -329,21 +330,24 @@ class Live:
         bounties = self.track.active_bounties(rnd)
         r = self.flow("inspect-enemies", scroll_preview=leader or bool(bounties))
         kinds = r.get("kinds") or []
-        if r.get("ambiguousEnemyNames"):
-            raise Stop(f"ambiguous enemy names in the preview: {r['ambiguousEnemyNames']}")
+        ambiguous = r.get("ambiguousEnemyNames") or {}
         panel_match = (r.get("inspection") or {}).get("match", {})
         if leader:
             hidden = rnd == self.gd.hidden_round
             key = "hiddenBossId" if hidden else "bossId"
             boss_id = panel_match.get(key) or (self.state.hidden_boss_id if hidden else self.state.boss_id)
+            kinds, ambiguous, boss_id = resolve_leader_names(self.gd, rnd, kinds, ambiguous, boss_id)
+        else:
+            boss_id = self.state.boss_id or s["match"].get("bossId")
+        if ambiguous:
+            raise Stop(f"ambiguous enemy names in the preview: {ambiguous}")
+        if leader:
             if not boss_id:
                 raise Stop("The leader name was not verified in the enemy preview")
             if hidden:
                 self.state.hidden_boss_id = boss_id
             else:
                 self.state.boss_id = boss_id
-        else:
-            boss_id = self.state.boss_id or s["match"].get("bossId")
         state = {"config": {"modeId": self.gd.mode_id}}
         inputs = {"round": rnd, "bossId": boss_id, "bounties": bounties,
                   "factions": s["match"].get("factions")}

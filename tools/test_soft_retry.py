@@ -538,4 +538,41 @@ with patch("harness.screen.withdraw.Frame", return_value=frame):
     assert withdraw.analyze(None, args) is None
     panel.remove("HandSale.Button")
     assert withdraw.analyze(None, args) is not None and withdraw.result["sourceCleared"]
+
+# A leader label repeated on the scrolled page can still identify the round's unique boss variant.
+leader_names = {"假想敌:胄": ["enemy_9013_acstmk", "enemy_9013_acstmk_2"]}
+for round_number, key, boss_id, enemy_id in (
+    (14, "boss_id", "boss_1", "enemy_9013_acstmk"),
+    (15, "hidden_boss_id", "boss_8", "enemy_9013_acstmk_2"),
+):
+    for reported_id in (None, boss_id):
+        live, _ = make(lambda _: None)
+        live.gd = load().for_mode("mode_single_13")
+        live.track = types.SimpleNamespace(active_bounties=lambda _: [])
+        field = "hiddenBossId" if round_number == 15 else "bossId"
+        live.flow = lambda *_, **__: {"inspection": {"match": {field: reported_id}}, "kinds": ["escort"],
+                                      "ambiguousEnemyNames": leader_names}
+        calls = []
+
+        def request(operation, state, **kwargs):
+            calls.append((operation, kwargs))
+            return {"preview": [], "templateId": "leader"}
+
+        live.sc = types.SimpleNamespace(request=request)
+        live.preview({"match": {"round": round_number}})
+        assert getattr(live.state, key) == boss_id and live.state.preview_round == round_number
+        assert calls == [("preview", {"round": round_number, "bossId": boss_id,
+                                      "bounties": [], "factions": None, "kinds": sorted(["escort", enemy_id])})]
+
+for round_number, ambiguous in ((13, leader_names), (14, {**leader_names, "不明": ["a", "b"]})):
+    live, _ = make(lambda _: None)
+    live.gd = load().for_mode("mode_single_13")
+    live.track = types.SimpleNamespace(active_bounties=lambda _: [])
+    live.flow = lambda *_, **__: {"ambiguousEnemyNames": ambiguous}
+    try:
+        live.preview({"match": {"round": round_number}})
+    except Stop as error:
+        assert "ambiguous enemy names" in str(error)
+    else:
+        raise AssertionError("An unresolved enemy name was accepted")
 print("soft retry checks passed")
