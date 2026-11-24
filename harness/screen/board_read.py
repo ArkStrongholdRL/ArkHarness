@@ -80,9 +80,17 @@ class BoardReadRecognition(CustomRecognition):
             return None
         if kind == "read":
             if not board_details:
-                return None
-            self.identity = chess_identity(self.reader, frame)
+                candidate = chess_identity(self.reader, frame)
+                if candidate.get("kind") != "token":
+                    return None
+                self.identity = candidate
+            else:
+                self.identity = chess_identity(self.reader, frame)
             return hit
+        if kind == "closed" and self.identity and self.identity.get("kind") == "token":
+            displayed = chess_identity(self.reader, frame)
+            if displayed.get("kind") == "token" and set(displayed["candidateIds"]).intersection(self.identity["candidateIds"]):
+                return None
         if details or (self.reader.stage_hint or frame.stage_id()) != self.stage:
             if kind == "scan":
                 self.scan_reason = "Operator details were still open" if details else "Stage was not recognized"
@@ -93,9 +101,10 @@ class BoardReadRecognition(CustomRecognition):
                 return None
             self.hud = hud
             if self.known_layout is not None:
-                if self.deploy_cap - hud[2] > len(self.known_layout):
+                known_chess = sum(name not in self.reader.tokens for name, _ in self.known_layout.values())
+                if self.deploy_cap - hud[2] > known_chess:
                     self.scan_reason = (f"HUD reports {self.deploy_cap - hud[2]} operators, but only "
-                                        f"{len(self.known_layout)} positions are recorded")
+                                        f"{known_chess} operator positions are recorded")
                     return None
                 self.markers = {tile: (facing,) for tile, (_, facing) in self.known_layout.items()}
                 return hit
@@ -250,12 +259,14 @@ def read_board_tiles(tasker: Tasker, reader: Reader, board: dict, *,
         if recognition.allow_missing:
             expected = deploy_cap - recognition.hud[2]
             missing = [tile for tile in candidates if tile not in pieces]
-            if len(pieces) < expected:
+            chess_count = sum(p.get("kind", "chess") == "chess" for p in pieces.values())
+            if chess_count < expected:
                 for tile in missing:
                     inspect(tile)
-            if len(pieces) != expected:
+                chess_count = sum(p.get("kind", "chess") == "chess" for p in pieces.values())
+            if chess_count != expected:
                 unread = [tile for tile in missing if tile not in pieces]
-                raise RuntimeError(f"Read {len(pieces)} saved board occupants but HUD reports {expected}; "
+                raise RuntimeError(f"Read {chess_count} saved board operators but HUD reports {expected}; "
                                    f"unread saved tiles: {unread}")
     finally:
         resource.unregister_custom_recognition("ArkBoardRead")

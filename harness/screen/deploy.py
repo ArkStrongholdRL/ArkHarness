@@ -75,7 +75,7 @@ def deployment_tiles(stage: dict, field: str, *, include_changed: bool = True) -
 class DeployRecognition(CustomRecognition):
     def __init__(self, stage: str, source: tuple[int, int], name: str, target: tuple[int, int],
                  normal_target: tuple[int, int], facing: str, *, from_board: bool = False,
-                 expected_round: int | None = None, stage_confirmed: bool = False):
+                 expected_round: int | None = None, stage_confirmed: bool = False, summon: bool = False):
         super().__init__()
         self.stage = stage
         self.source = source
@@ -86,6 +86,7 @@ class DeployRecognition(CustomRecognition):
         self.from_board = from_board
         self.expected_round = expected_round
         self.stage_confirmed = stage_confirmed
+        self.summon = summon
         self.round = None
         self.remaining = None
         self.result = None
@@ -114,7 +115,7 @@ class DeployRecognition(CustomRecognition):
         return frame.hit("Board.FacingCancelIcon", roi=roi) or frame.hit("Board.FacingCancelText", roi=roi)
 
     def drag_target(self, frame: Frame) -> tuple | None:
-        if not frame.hit("Board.SellText") or not any(
+        if (not self.summon and not frame.hit("Board.SellText")) or not any(
             clean(row.text) == self.name for row in frame.rows("Board.CarriedName")
         ):
             self.reason = "The dragged operator was not verified by name"
@@ -149,11 +150,11 @@ class DeployRecognition(CustomRecognition):
             self.reason = f"Expected preparation round {self.expected_round}, read {current_round}"
             return None
         if kind == "verify":
-            delta = 0 if self.from_board else 1
+            delta = 0 if self.from_board or self.summon else 1
             if self.remaining is None or current_round != self.round or self.remaining - remaining != delta:
                 self.reason = f"After release, round={current_round}, remaining capacity={remaining}"
                 return None
-            if not self.stage_confirmed and not matches_facing(frame, self.normal_target, self.facing):
+            if not self.stage_confirmed and not self.summon and not matches_facing(frame, self.normal_target, self.facing):
                 self.reason = "The direction was not set in the requested tile's picker"
                 return None
             self.result = {"round": current_round, "remainingBefore": self.remaining,
@@ -161,7 +162,7 @@ class DeployRecognition(CustomRecognition):
             return (0, 0, 1, 1)
         if kind != "pick":
             return None
-        if not self.from_board and remaining <= 0:
+        if not self.from_board and not self.summon and remaining <= 0:
             self.reason = "No deployment position remains"
             return None
         if not self.stage_confirmed and has_facing_marker(frame, self.normal_target):
@@ -203,7 +204,7 @@ def completed_facing_swipes(nodes) -> int:
 
 def place_operator(tasker: Tasker, board: dict, stages: dict, source: tuple[int, int],
                    name: str, row: int, col: int, facing: str, *, from_board: bool = False,
-                   expected_round: int | None = None, stage_confirmed: bool = False) -> dict:
+                   expected_round: int | None = None, stage_confirmed: bool = False, summon: bool = False) -> dict:
     name = clean(name)
     if not name:
         raise ValueError("An exact displayed operator name is required")
@@ -219,7 +220,7 @@ def place_operator(tasker: Tasker, board: dict, stages: dict, source: tuple[int,
     source_x, source_y = source
     recognition = DeployRecognition(stage, source, name, (x, y), normal_target, facing,
                                     from_board=from_board, expected_round=expected_round,
-                                    stage_confirmed=stage_confirmed)
+                                    stage_confirmed=stage_confirmed, summon=summon)
     resource = tasker.resource
     if not resource.register_custom_recognition("ArkDeploy", recognition):
         raise RuntimeError("Could not register the deployment recognizer")
@@ -230,7 +231,7 @@ def place_operator(tasker: Tasker, board: dict, stages: dict, source: tuple[int,
             "Board.CancelMove": {"target": [35, 675] if from_board else [source_x, source_y]},
             "Board.MoveToTile": {"target": [x, y]},
             "Board.ChooseFacing": direction,
-            "Board.PlacementWithoutSwipe": {"enabled": not stage_confirmed},
+            "Board.PlacementWithoutSwipe": {"enabled": summon or not stage_confirmed},
         }).wait()
         detail = job.get()
         nodes = detail.nodes if detail else []
@@ -239,8 +240,11 @@ def place_operator(tasker: Tasker, board: dict, stages: dict, source: tuple[int,
     names = [node.name for node in nodes]
     swipes = completed_facing_swipes(nodes)
     if (job.succeeded and names and names[-1] in PLACEMENT_TERMINALS
-            and recognition.result and (swipes or not stage_confirmed)):
-        return {"name": name, "stageId": stage, "row": row, "col": col, **recognition.result, "facingSwipes": swipes}
+            and recognition.result and (swipes or summon or not stage_confirmed)):
+        receipt = {**recognition.result, "facingSwipes": swipes}
+        if summon and not swipes:
+            receipt["facing"] = None
+        return {"name": name, "stageId": stage, "row": row, "col": col, **receipt}
     if "Board.ReleaseTarget" in names:
         raise RuntimeError(f"A release was attempted; placement is unverified after {swipes} direction swipe(s): {recognition.reason}")
     if "Board.PickHand" in names:
@@ -250,13 +254,13 @@ def place_operator(tasker: Tasker, board: dict, stages: dict, source: tuple[int,
 
 def deploy(tasker: Tasker, slots: dict, board: dict, stages: dict, hand_slot: int,
            name: str, row: int, col: int, facing: str, *, expected_round: int | None = None,
-           stage_confirmed: bool = False) -> dict:
+           stage_confirmed: bool = False, summon: bool = False) -> dict:
     if type(hand_slot) is not int or not 0 <= hand_slot < slots["hand"]["capacity"]:
         raise ValueError("A valid zero-based screen hand slot is required")
     source = tuple(slots["hand"]["centersByView"]["normal"][hand_slot])
     return {"handSlot": hand_slot, **place_operator(
         tasker, board, stages, source, name, row, col, facing, expected_round=expected_round,
-        stage_confirmed=stage_confirmed)}
+        stage_confirmed=stage_confirmed, summon=summon)}
 
 
 def move_board(tasker: Tasker, board: dict, stages: dict, name: str,

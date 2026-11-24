@@ -16,7 +16,7 @@ from .read import ROOT, clean, integer, read_json
 
 class WithdrawRecognition(CustomRecognition):
     def __init__(self, stage: str, source: tuple[int, int], hand: tuple[int, int], name: str,
-                 expected_round: int | None, stage_confirmed: bool):
+                 expected_round: int | None, stage_confirmed: bool, *, summon: bool = False):
         super().__init__()
         self.stage = stage
         self.source = source
@@ -24,6 +24,7 @@ class WithdrawRecognition(CustomRecognition):
         self.name = name
         self.expected_round = expected_round
         self.stage_confirmed = stage_confirmed
+        self.summon = summon
         self.before = None
         self.hand_confirmed = False
         self.source_marked = False
@@ -38,7 +39,7 @@ class WithdrawRecognition(CustomRecognition):
             return None
         kind = json.loads(argv.custom_recognition_param)
         if kind == "hand":
-            if (self.before is not None and (frame.hit("HandSale.Button") or frame.hit("Screen.OperatorDetails"))
+            if (self.before is not None and (self.summon or frame.hit("HandSale.Button") or frame.hit("Screen.OperatorDetails"))
                     and not frame.hit("Withdraw.Icon") and clean(frame.text("Board.CarriedName")) == self.name):
                 self.hand_confirmed = True
                 return (0, 0, 1, 1)
@@ -74,6 +75,9 @@ class WithdrawRecognition(CustomRecognition):
                            else "The board details were still open before selecting the hand slot")
             return None
         remaining_increased = self.before["remaining"] is not None and remaining == self.before["remaining"] + 1
+        if self.summon and (remaining is None or remaining != self.before["remaining"]):
+            self.reason = "Withdrawing a summon did not preserve the ordinary deployment capacity"
+            return None
         if (not self.stage_confirmed and not remaining_increased
                 and (not self.source_marked or has_facing_marker(frame, self.source))):
             self.reason = "Neither the deployment count nor the source marker confirmed the withdrawal"
@@ -101,7 +105,8 @@ class WithdrawRecognition(CustomRecognition):
 
 
 def withdraw_board(tasker: Tasker, slots: dict, board: dict, name: str, row: int, col: int,
-                   hand_slot: int, *, expected_round: int | None = None, stage_confirmed: bool = False) -> dict:
+                   hand_slot: int, *, expected_round: int | None = None, stage_confirmed: bool = False,
+                   summon: bool = False) -> dict:
     name = clean(name)
     hand_centers = slots["hand"]["centersByView"]["normal"]
     if not name or type(hand_slot) is not int or not 0 <= hand_slot < len(hand_centers):
@@ -109,7 +114,7 @@ def withdraw_board(tasker: Tasker, slots: dict, board: dict, name: str, row: int
     stage = board["stageId"]
     source = tile_point(board, row, col, view_name="normal")
     recognition = WithdrawRecognition(stage, source, tuple(hand_centers[hand_slot]), name, expected_round,
-                                      stage_confirmed)
+                                      stage_confirmed, summon=summon)
     resource = tasker.resource
     if not resource.register_custom_recognition("ArkWithdraw", recognition):
         raise RuntimeError("Could not register the withdraw recognizer")

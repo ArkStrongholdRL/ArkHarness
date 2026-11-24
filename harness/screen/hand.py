@@ -58,14 +58,19 @@ class HandRecognition(CustomRecognition):
         kind = json.loads(argv.custom_recognition_param)
         board_details = frame.hit("Withdraw.Icon")
         hand_details = frame.hit("HandSale.Button") or frame.hit("Screen.OperatorDetails")
-        details = board_details or hand_details
+        token = None
+        if not board_details and not hand_details and kind in {"read", "empty", "closed", "reset"}:
+            candidate = chess_identity(self.reader, frame)
+            if candidate.get("kind") == "token":
+                token = candidate
+        details = board_details or hand_details or token is not None
         hit = (0, 0, 1, 1)
         if kind == "reset":
             return hit if details else None
         if kind == "read":
-            if not hand_details or board_details:
+            if board_details or (not hand_details and token is None):
                 return None
-            self.result = {"screenSlot": self.slot, "status": "occupied", **chess_identity(self.reader, frame)}
+            self.result = {"screenSlot": self.slot, "status": "occupied", **(token or chess_identity(self.reader, frame))}
             return hit
 
         hud = (
@@ -89,7 +94,8 @@ class HandRecognition(CustomRecognition):
         return hit
 
 
-def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, *, skip_bare: bool = False) -> dict:
+def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, *,
+              skip_bare: bool = False, known_summons: tuple[int, ...] = ()) -> dict:
     """Return hand slots from one preparation round and restore its anchor.
 
     skip_bare: slots whose tier badge is clearly absent are reported empty without a click (collapsed-shop view only).
@@ -102,7 +108,7 @@ def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, 
         job = tasker.controller.post_screencap().wait()
         if not job.succeeded or job.get().shape != (720, 1280, 3):
             raise RuntimeError("Could not capture the bench frame")
-        selected = bench_candidates(job.get(), reader) or [0]
+        selected = sorted(set(bench_candidates(job.get(), reader)).union(known_summons)) or [0]
         bare = [slot for slot in range(capacity) if slot not in selected]
     if not selected or any(type(slot) is not int or not 0 <= slot < capacity for slot in selected):
         raise ValueError("Expected valid zero-based screen hand slots")

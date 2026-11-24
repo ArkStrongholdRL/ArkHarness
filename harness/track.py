@@ -559,6 +559,9 @@ class Track:
                 return {"area": "board", "key": k, "piece": p}
         return None
 
+    def deployed_chess_count(self) -> int:
+        return sum(piece.kind == "chess" for piece in self.board.values())
+
     def move(self, uid, to, dir_="RIGHT") -> bool:
         """sidecar `move {uid, to:[row,col], dir}`: a board tile (empty, or a swap with its occupant), from hand, temp or board."""
         loc = self._loc_by_uid(uid)
@@ -570,6 +573,15 @@ class Track:
         if loc["area"] == "board" and loc["key"] == key:  # re-orientation on its own tile
             p.dir = dir_
             return True
+        if p.kind == "token":
+            owner = self._loc_by_uid(p.owner)
+            if occ is not None or not owner or owner["area"] != "board" or owner["piece"].kind != "chess":
+                return False
+            if loc["area"] != "board" and p.count > 1:
+                p.count -= 1
+                self.board[key] = self._new("token", p.id, owner=p.owner, dir=dir_)
+                self._recompute()
+                return True
         self._detach(loc)
         if occ is not None:
             self.board.pop(key)
@@ -586,6 +598,12 @@ class Track:
 
     def withdraw_slot(self, uid: int) -> int:
         """The rightmost slot available once the withdrawn owner's summons leave."""
+        loc = self._loc_by_uid(uid)
+        if loc and loc["piece"].kind == "token":
+            token = loc["piece"]
+            return next((i for i, p in enumerate(self.hand)
+                         if p and p.kind == "token" and p.id == token.id and p.owner == token.owner),
+                        rightmost_free(self.hand))
         return next((i for i in range(len(self.hand) - 1, -1, -1)
                      if self.hand[i] is None or (self.hand[i].kind == "token" and self.hand[i].owner == uid)), -1)
 
@@ -594,6 +612,19 @@ class Track:
         loc = self._loc_by_uid(uid)
         if loc is None or loc["area"] != "board":
             return False
+        piece = loc["piece"]
+        if piece.kind == "token":
+            slot = self.withdraw_slot(uid)
+            if slot < 0:
+                return False
+            self._detach(loc)
+            if self.hand[slot] is None:
+                piece.dir = None
+                self.hand[slot] = piece
+            else:
+                self.hand[slot].count += piece.count
+            self._recompute()
+            return True
         self._detach(loc)
         self._remove_tokens_of(uid)
         self._stow(loc["piece"])
@@ -679,6 +710,7 @@ class Track:
             d = {"uid": p.uid, "kind": p.kind, "id": p.id, "items": [it.id for it in p.items] if p.kind == "chess" else []}
             if p.kind == "token" and p.owner is not None:
                 d["ownerUid"] = p.owner
+                d["count"] = p.count
             if p.bought:
                 d["boughtRound"] = p.bought
             if row is not None:

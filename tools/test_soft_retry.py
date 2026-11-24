@@ -410,6 +410,32 @@ with (patch("harness.layout_recovery.set_shop_open", return_value={"before": hud
 assert not read_slots.called and read_tiles.call_args.args[3] == [(10, 4), (10, 5)]
 assert tr.board == {"10,4": operator} and operator.dir == "LEFT"
 
+# Summon recovery checks the original slot even if a stack retains another copy.
+for count, applied in ((1, True), (2, True), (2, False)):
+    tr = Track(gd, legacy_equip_snapshot=False)
+    owner = tr._new("chess", "chess_char_5_21_a")
+    summon = tr._new("token", "token_10066_closur_ourbase", owner=owner.uid, count=count)
+    tr.board["10,4"], tr.hand[9] = owner, summon
+    step = {"round": 5, "stageId": stage, "uid": summon.uid, "id": summon.id,
+            "source": None, "target": [10, 5], "handSlot": 9, "verifiedFacing": "RIGHT"}
+    occupied = not applied or count > 1
+    hand = {"stageId": stage, "round": 5, "funds": 1, "remaining": 0,
+            "slots": [{"screenSlot": 9, "status": "occupied" if occupied else "empty", "id": summon.id}]}
+    hud = {"round": 5, "funds": 1, "expanded": False}
+    screen = {"match": {"round": 5}, "self": {"funds": 1, "deployCap": 1, "deployCount": 1}}
+    with (patch("harness.layout_recovery.set_shop_open", return_value={"before": hud, "after": hud}),
+          patch("harness.layout_recovery.read_hand", return_value=hand) as read_slots,
+          patch("harness.layout_recovery.read_equipment_slots") as read_rack,
+          patch("harness.layout_recovery.inspect_board_positions",
+                return_value={(10, 5): {"id": summon.id} if applied else None}) as read_tiles):
+        result = recover_layout_step(None, None, {"stageId": stage}, tr, step, screen)
+    assert result == {"applied": applied, "handSlots": [9], "rackSlots": [], "tiles": [(10, 5)]}
+    assert read_slots.call_args.args[2] == [9] and read_tiles.call_args.args[3] == [(10, 5)]
+    assert not read_rack.called and tr.deployed_chess_count() == 1
+    assert (tr.hand[9].count if tr.hand[9] else 0) == count - int(applied)
+    if applied:
+        assert (tr.board["10,5"].owner, tr.board["10,5"].dir) == (owner.uid, "RIGHT")
+
 # A drifting LEVEL text box must leave the calibrated IV digit crop fixed.
 for heading_box in ((18, 562, 76, 22), (28, 557, 94, 31)):
     frame = types.SimpleNamespace(

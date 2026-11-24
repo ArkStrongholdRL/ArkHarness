@@ -245,7 +245,7 @@ class Live:
                 and self.state.tracked_deploy_count_round == state["match"]["round"]
                 and "board" not in self.state.dirty_areas and own["deployCount"] is not None):
             remaining = own["deployCap"] - own["deployCount"]
-            own["deployCount"] = len(self.track.board)
+            own["deployCount"] = self.track.deployed_chess_count()
             own["deployCap"] = own["deployCount"] + remaining
         return state
 
@@ -671,8 +671,9 @@ class Live:
                 if scheduled is not None:
                     rack_slots = [scheduled[0]]
             layout = self.board_ledger(rnd) if "board" in plan else None
+            known_summons = tuple(i for i, p in enumerate(self.track.hand) if p and p.kind == "token")
             scan = scan_holdings(self.tasker, self.reader, board, areas=set(plan), rack_slots=rack_slots,
-                                 known_layout=layout)
+                                 known_layout=layout, known_summons=known_summons)
             if scheduled is not None:
                 observed = scan["temp"][0]
                 if observed.get("id") != scheduled[1]:
@@ -1085,7 +1086,7 @@ class Live:
         areas = {"hand"} & set(self.state.dirty_areas)
         layout = None
         if (not pending and "board" in self.state.dirty_areas
-                and s["self"]["deployCount"] == len(self.track.board)):
+                and s["self"]["deployCount"] == self.track.deployed_chess_count()):
             areas.add("board")
             layout = self.board_ledger(rnd)
         if not pending and areas:
@@ -1152,7 +1153,7 @@ class Live:
         rnd = s["match"]["round"]
         own = s["self"]
         count = own["deployCount"]
-        if not own["canReady"] or not count or count != len(self.track.board) or "board" in self.state.dirty_areas:
+        if not own["canReady"] or not count or count != self.track.deployed_chess_count() or "board" in self.state.dirty_areas:
             raise Stop("Could not verify the deployed formation for the uncalibrated leader round")
         row = {"screen": "preparation", "round": rnd, "decision": "leader round", "deployed": count}
         if self.a.stop_before_end or self.a.stop_after_layout:
@@ -1238,6 +1239,7 @@ class Live:
                 if receipt.get("replan") or self.state.dirty_areas:
                     self.log({**row, "result": receipts})
                     return
+        self.place_summons(board, [p for p in r["board"] if p["kind"] == "token"], rnd, receipts)
         if self.a.stop_after_layout:
             anchor = self.flow("observe")
             if anchor["screen"] != "preparation" or anchor["round"] != rnd:
@@ -1255,6 +1257,66 @@ class Live:
                                                     rnd, st["match"]["stageId"])
         receipts["ready"] = self.ready_battle()
         self.log({**row, "result": receipts})
+
+    def place_summons(self, board, planned, rnd, receipts):
+        if not planned:
+            return
+        from .layout import as_tile
+        from .layout_recovery import matches_piece, recover_layout_step
+        from .screen.board_read import inspect_board_positions
+        from .screen.deploy import deploy, deployment_tiles
+        from .screen.shop import set_shop_open
+
+        field = board.get("deployField", "normal")
+        legal_tiles = deployment_tiles(self.reader.stages[board["stageId"]], field, include_changed=False)
+        calibrated_tiles = set.intersection(*({tuple(cell[:2]) for cell in board["views"][view]["groundCenters"]}
+                                              for view in ("normal", "drag")))
+        for target in planned:
+            tile = (target["row"], target["col"])
+            owner_uid = target.get("ownerUid")
+            owner = self.track._loc_by_uid(owner_uid)
+            stack = next(((i, p) for i, p in enumerate(self.track.hand)
+                          if p and p.kind == "token" and p.id == target["id"] and p.owner == owner_uid), None)
+            if tile not in legal_tiles or tile not in calibrated_tiles:
+                receipts.setdefault("skippedSummons", []).append({**target, "reason": "Destination is not calibrated"})
+                continue
+            if not owner or owner["area"] != "board" or stack is None:
+                receipts.setdefault("skippedSummons", []).append({**target, "reason": "No matching deployed owner or hand stack"})
+                continue
+            slot, summon = stack
+            s = self.read()
+            self._shop_open = False
+            own = s["self"]
+            funds, cap, count = (own.get(key) for key in ("funds", "deployCap", "deployCount"))
+            if (s["match"]["round"] != rnd or s["match"]["stageId"] != board["stageId"]
+                    or any(type(value) is not int for value in (funds, cap, count))
+                    or count != self.track.deployed_chess_count()):
+                raise RuntimeError("The preparation HUD did not match the summon placement")
+            legal = self.sc.request("validateSummon", self.screen_state(s), uid=summon.uid,
+                                    ownerUid=owner_uid, to=list(tile), dir=target["dir"])
+            if not legal["legal"]:
+                receipts.setdefault("skippedSummons", []).append({**target, "reason": legal["reason"]})
+                continue
+            set_shop_open(self.tasker, False)
+            owner_tile = as_tile(owner["key"])
+            visible = inspect_board_positions(self.tasker, self.reader, board, [owner_tile, tile],
+                                              (rnd, funds, cap - count))
+            if not matches_piece(visible[owner_tile], owner["piece"]) or visible[tile] is not None:
+                raise RuntimeError("The summon owner or destination did not match the board")
+            step = {"round": rnd, "stageId": board["stageId"], "uid": summon.uid, "id": summon.id,
+                    "source": None, "target": tile, "handSlot": slot}
+            with device_action(self.state, self.save, "deploy summon"):
+                self.state.layout_step = step
+                self.save()
+                receipt = deploy(self.tasker, self.reader.slots, board, self.reader.stages, slot, self.name(summon.id),
+                                 *tile, target["dir"], expected_round=rnd, stage_confirmed=True, summon=True)
+                step["verifiedFacing"] = receipt["facing"]
+                self.save()
+                checked = recover_layout_step(self.tasker, self.reader, board, self.track, step, s)
+                if not checked["applied"]:
+                    raise RuntimeError("The summon was still in its original hand slot after release")
+                self.state.layout_step = None
+            receipts.setdefault("summons", []).append({**receipt, "ownerUid": owner_uid, "verified": checked})
 
     # ---------- waiting ----------
     def wait_change(self, screen, rnd=None, timeout=600):

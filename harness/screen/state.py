@@ -56,7 +56,8 @@ LIVE_SCREENS: dict[str, LiveScreen] = {
 
 def screen_snapshot(frame: Frame) -> dict:
     screen = frame.scene()
-    if screen == "drag" and frame.hit("Board.FacingCancel"):
+    if ((screen == "drag" and frame.hit("Board.FacingCancel"))
+            or (screen in (None, "preparation") and frame.hit("Board.FacingCancelIcon") and frame.hit("ArkRestText"))):
         screen = "directionPicker"
     anchored = screen == "preparation" and frame.hit("ArkRestText")
     if screen in {None, "preparation"}:

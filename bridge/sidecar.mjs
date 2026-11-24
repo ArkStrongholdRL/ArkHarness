@@ -131,7 +131,7 @@ export function buildShadow(E, s, opts = {}) {
     // boughtRound (track: the round we got it; unknown = an earlier round, never "fresh")
     const q = { uid: p.uid, kind: p.kind, id: p.id, poolCopies: 0, boughtRound: Number.isInteger(p.boughtRound) ? p.boughtRound : 0, meta: {} };
     if (p.kind === 'chess') q.items = [];
-    if (p.kind === 'token') { q.count = 1; q.ownerUid = p.ownerUid; }
+    if (p.kind === 'token') { q.count = p.count ?? 1; q.ownerUid = p.ownerUid; }
     if (p.dir) q.dir = p.dir;
     q._items = p.items || [];
     return q;
@@ -181,7 +181,8 @@ function recording(ps, fn) {
 }
 
 export function seatResult(ps) {
-  const pc = (p) => (p ? { uid: p.uid, kind: p.kind, id: p.id, items: (p.items || []).map((x) => x.id) } : null);
+  const pc = (p) => (p ? { uid: p.uid, kind: p.kind, id: p.id, items: (p.items || []).map((x) => x.id),
+    ...(p.kind === 'token' ? { ownerUid: p.ownerUid, count: p.count } : {}) } : null);
   return {
     board: [...ps.board.entries()].map(([k, p]) => { const [row, col] = k.split(',').map(Number); return { ...pc(p), row, col, dir: p.dir ?? 'RIGHT' }; }),
     hand: ps.hand.map(pc), temp: ps.temp.map(pc),
@@ -200,6 +201,19 @@ function applyOps(ps, ops) {
 
 /** Run one request's legacy steps on a built shadow. */
 export function runOp(E, { m, ps }, op, req = {}) {
+  if (op === 'validateSummon') {
+    const { uid, ownerUid, to: [row, col], dir } = req;
+    const loc = ps.find(uid);
+    const owner = ps.find(ownerUid);
+    const token = loc?.piece.kind === 'token' ? ps.gd.token(loc.piece.id) : null;
+    if (loc?.area !== 'hand' || loc.piece.kind !== 'token' || loc.piece.ownerUid !== ownerUid
+        || owner?.area !== 'board' || owner.piece.kind !== 'chess' || !token?.placeable
+        || !token.owners?.includes(owner.piece.id) || ps.board.has(`${row},${col}`)) {
+      return { ok: true, legal: false, reason: 'Summon, deployed owner or empty tile did not match' };
+    }
+    const result = ps.move(uid, { area: 'board', row, col }, dir);
+    return { ok: true, legal: result?.ok === true, reason: result?.error ?? null };
+  }
   const { bot } = E;
   if (op === 'tail') applyOps(ps, req.ops || []); // Python's resolveTemp, before the recording: not ours to return
   const ops = recording(ps, () => {

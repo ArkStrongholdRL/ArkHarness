@@ -31,7 +31,7 @@ def execute_layout(tasker: Tasker, reader: Reader, calibration: dict, track: Tra
     if (match.get("stageId") != calibration["stageId"] or type(current_round) is not int
             or state["deployCap"] != screen["self"].get("deployCap")):
         raise ValueError("Layout and calibration must match the current stage, round and capacity")
-    if screen["self"].get("deployCount") != len(track.board):
+    if screen["self"].get("deployCount") != track.deployed_chess_count():
         raise ValueError("The deployment count differs from the saved board")
     leader = current_round in {round_number for round_number in (
         (screen.get("config") or {}).get("bossRound") or track.gd.boss_round,
@@ -49,7 +49,7 @@ def execute_layout(tasker: Tasker, reader: Reader, calibration: dict, track: Tra
     names = {}
     for step in steps:
         piece = track._loc_by_uid(step.uid)["piece"]
-        name = (operator_names or {}).get(step.uid) or (track.gd.chess(piece.id) or {}).get("name")
+        name = (operator_names or {}).get(step.uid) or (track.gd.chess(piece.id) or track.gd.token(piece.id) or {}).get("name")
         if not name:
             raise ValueError(f"No displayed operator name for UID {step.uid}")
         names[step.uid] = name
@@ -71,7 +71,8 @@ def execute_layout(tasker: Tasker, reader: Reader, calibration: dict, track: Tra
                 before_step(step)
             if step.target is None:
                 receipt = withdraw_board(tasker, reader.slots, calibration, name, *step.source, step.hand_slot,
-                                         expected_round=current_round, stage_confirmed=True)
+                                         expected_round=current_round, stage_confirmed=True,
+                                         summon=loc["piece"].kind == "token")
                 track.bench(step.uid)
                 operation = "bench"
             elif step.source is None:

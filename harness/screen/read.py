@@ -137,10 +137,11 @@ def chess_identity(reader: "Reader", frame: Frame) -> dict:
     identity = catalog_identity(reader, frame, "Board.CarriedName", "chess")
     if not identity["candidateIds"]:
         tokens = reader.tokens.get(identity["name"], [])
-        if len(tokens) == 1:
-            token_id, _ = tokens[0]
+        if tokens:
+            ids = [key for key, _ in tokens]
+            token_id = ids[0] if len(ids) == 1 else None
             return {**identity, "kind": "token", "id": token_id, "baseId": token_id,
-                    "candidateIds": [token_id]}
+                    "candidateIds": ids}
     return identity
 
 

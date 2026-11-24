@@ -27,7 +27,7 @@ def layout_outcomes(track, step):
             raise ValueError("Interrupted withdrawal no longer matches its destination slot")
     else:
         key = f"{target[0]},{target[1]}"
-        if key in track.board or not changed.move(step["uid"], target, None):
+        if key in track.board or not changed.move(step["uid"], target, step.get("verifiedFacing")):
             raise ValueError("Interrupted placement no longer matches its destination tile")
     return changed
 
@@ -47,12 +47,15 @@ def recover_layout_step(tasker, reader, board, track, step, screen):
     if any(type(value) is not int for value in (funds, cap, count)):
         raise RuntimeError("Preparation HUD is incomplete for layout recovery")
     changed = layout_outcomes(track, step)
+    summon = track._loc_by_uid(step["uid"])["piece"].kind == "token"
 
     def signature(piece):
         return (piece.kind, piece.id) if piece else None
 
     slots = [i for i, (before, after) in enumerate(zip(track.hand, changed.hand))
              if signature(before) != signature(after)]
+    if summon and step["handSlot"] is not None:
+        slots = [step["handSlot"]]
     rack_slots = [i for i, (before, after) in enumerate(zip(track.temp[:TEMP], changed.temp[:TEMP]))
                   if signature(before) != signature(after)]
     keys = sorted(k for k in track.board.keys() | changed.board.keys()

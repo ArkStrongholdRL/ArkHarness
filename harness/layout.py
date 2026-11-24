@@ -111,8 +111,8 @@ def plan_layout(track: Track, state: dict, result: dict, calibrated: set[tuple[i
                 or not permits(tiles, profiles[uid], tile) or direction not in DIRECTIONS):
             raise ValueError(f"Invalid or uncalibrated layout destination for UID {uid}")
     for key, piece in track.board.items():
-        if piece.kind != "chess" or as_tile(key) not in calibrated:
-            raise ValueError("Layout requires a calibrated board of trackable operators")
+        if piece.kind not in {"chess", "token"} or as_tile(key) not in calibrated:
+            raise ValueError("Layout requires a calibrated board of trackable pieces")
     for uid, profile in profiles.items():
         loc = track._loc_by_uid(uid)
         if (loc is None or loc["area"] not in {"board", "hand"} or loc["piece"].id != profile["id"]
@@ -128,7 +128,8 @@ def plan_layout(track: Track, state: dict, result: dict, calibrated: set[tuple[i
     staged = set()
     profile_order = list(targets)
     while True:
-        excess = [piece.uid for piece in shadow.board.values() if piece.uid not in targets]
+        excess = [piece.uid for piece in sorted(shadow.board.values(), key=lambda p: p.kind != "token")
+                  if piece.uid not in targets]
         pending = [uid for uid in profile_order if not at_destination(shadow._loc_by_uid(uid), targets[uid])]
         if not pending and not excess:
             return steps
@@ -140,7 +141,7 @@ def plan_layout(track: Track, state: dict, result: dict, calibrated: set[tuple[i
             target, direction = targets[uid]
             loc = shadow._loc_by_uid(uid)
             if tile_key(target) not in shadow.board and (loc["area"] == "board"
-                    or len(shadow.board) < state["deployCap"]):
+                    or shadow.deployed_chess_count() < state["deployCap"]):
                 simulate(shadow, steps, uid, target, direction)
                 break
         else:

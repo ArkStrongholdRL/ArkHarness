@@ -21,7 +21,8 @@ from .shop import set_shop_open
 
 def scan_holdings(tasker: Tasker, reader: Reader, board: dict, *,
                   areas: set[str] | None = None, rack_slots: list[int] | None = None,
-                  known_layout: dict[tuple[int, int], tuple[str, str | None]] | None = None) -> dict:
+                  known_layout: dict[tuple[int, int], tuple[str, str | None]] | None = None,
+                  known_summons: tuple[int, ...] = ()) -> dict:
     """Read only the requested areas and restore the starting shop view."""
     areas = set(AREAS) if areas is None else areas
     if not areas or not areas <= set(AREAS):
@@ -32,7 +33,7 @@ def scan_holdings(tasker: Tasker, reader: Reader, board: dict, *,
     view = set_shop_open(tasker, False) if areas & {"hand", "board"} else None
     try:
         if "hand" in areas:
-            hand = read_hand(tasker, reader, skip_bare=True)
+            hand = read_hand(tasker, reader, skip_bare=True, known_summons=known_summons)
             phases.append(hand)
         if "board" in areas:
             field = read_board_tiles(tasker, reader, board, known_layout=known_layout)
@@ -83,14 +84,15 @@ def reconcile_holdings(track: Track, scan: dict, *, deploy_cap: int,
 
     if scan["unreadTiles"]:
         issues.append("board: some deployment tiles are uncalibrated")
-    if scan["board"] is not None and scan["remaining"] != deploy_cap - len(scan["board"]):
+    if scan["board"] is not None and scan["remaining"] != deploy_cap - sum(
+            p.get("kind", "chess") == "chess" for p in scan["board"]):
         issues.append("board: observed occupants disagree with the deployment count")
     for piece in scan["board"] or []:
         key = f"board:{piece['row']},{piece['col']}"
         unknown = piece["facing"] is None and scan.get("facingSource") == "track"
         if key in rows or not unknown and piece["facing"] not in {"UP", "RIGHT", "DOWN", "LEFT"}:
             issues.append(f"{key}: position or facing could not be verified")
-        rows[key] = ("chess", piece)
+        rows[key] = (piece.get("kind", "chess"), piece)
 
     for key in confirmed_ids.keys() - rows.keys():
         issues.append(f"{key}: supplied ID has no observed occupant")
