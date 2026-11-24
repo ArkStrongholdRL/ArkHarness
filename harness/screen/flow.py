@@ -8,7 +8,6 @@ import numpy as np
 from maa.context import Context
 from maa.custom_action import CustomAction
 from maa.custom_recognition import CustomRecognition
-from maa.define import AndRecognitionResult, CustomRecognitionResult, OrRecognitionResult
 from maa.tasker import Tasker
 
 from ..wave import match_preview
@@ -16,7 +15,7 @@ from .bounty import SLOTS as BOUNTY_SLOTS
 from .briefing import choose_bond_group, inspect_briefing
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .commander import select as select_commander
-from .native import Frame
+from .native import Frame, recognition_data
 from .read import CATALOG, ROOT, Reader, clean, integer, read_json, read_screen
 from .session import task_recognition
 from .state import (
@@ -52,16 +51,6 @@ ERRORS = {
     "ArkBattleNotVerified": "The requested battle or post-battle phase was not verified",
 }
 ENTRY_CHECKPOINTS = {"briefing": "Entry.BriefingCheckpoint", "squadSelection": "Entry.SquadCheckpoint"}
-
-
-def recognition_data(detail):
-    if detail is not None and detail.hit:
-        result = detail.best_result
-        if isinstance(result, CustomRecognitionResult) and isinstance(result.detail, dict):
-            yield result.detail
-        elif isinstance(result, (AndRecognitionResult, OrRecognitionResult)):
-            for child in result.sub_results:
-                yield from recognition_data(child)
 
 
 class ReadyAction(CustomAction):

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from maa.context import Context
 from maa.controller import CustomController
-from maa.define import OCRResult
+from maa.define import AndRecognitionResult, CustomRecognitionResult, OCRResult, OrRecognitionResult
 from numpy import ndarray
 
 
@@ -14,6 +14,24 @@ BOARD_PIPELINE = Path(__file__).resolve().parents[2] / "resource" / "pipeline" /
 STAGE_MARKERS = tuple((f"act3autochess_{node.removeprefix('Screen.Stage').lower()}", node)
                       for node in json.loads(BOARD_PIPELINE.read_text(encoding="utf-8"))
                       if re.fullmatch(r"Screen\.StageM[0-9]{2}", node))
+
+
+def recognition_data(detail):
+    if detail is not None and detail.hit:
+        result = detail.best_result
+        if isinstance(result, CustomRecognitionResult) and isinstance(result.detail, dict):
+            yield result.detail
+        elif isinstance(result, (AndRecognitionResult, OrRecognitionResult)):
+            for child in result.sub_results:
+                yield from recognition_data(child)
+
+
+def completed_data(nodes, *names):
+    for node in reversed(nodes):
+        if node.completed and node.name in names:
+            for data in recognition_data(node.recognition):
+                return data
+    return None
 
 
 class OfflineController(CustomController):
