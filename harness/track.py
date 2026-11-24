@@ -523,7 +523,7 @@ class Track:
         self._recompute()
         return True
 
-    def apply(self, a: int, read: dict) -> bool:
+    def apply(self, a: int, read: dict, *, after_buy=None) -> bool:
         """One executed prep action (encoder ACT numbering). `read` is the ScreenState the policy saw before it: the shop,
         the reward offer and the bonds are screen reads; hand, temp and board are the tracker's own."""
         sh = ((read or {}).get("self") or {}).get("shop") or {}
@@ -531,10 +531,10 @@ class Track:
             s = (sh.get("slots") or [None] * SHOP)[a - ACT["BUY"]]
             if not s:
                 return False
-            if s["kind"] == "chess":
-                return self._acquire_chess(s["id"], "buy", read) is not None
-            self._acquire_item(s["id"])
-            return True
+            piece = self._acquire_chess(s["id"], "buy", read) if s["kind"] == "chess" else self._acquire_item(s["id"])
+            if after_buy is not None and piece is not None and piece.id == s["id"]:
+                after_buy(piece)
+            return piece is not None or s["kind"] != "chess"
         if ACT["SELL"] <= a < ACT["REWARD"]:
             return self._sell(a - ACT["SELL"])
         if ACT["REWARD"] <= a < ACT["PERSONAL"]:

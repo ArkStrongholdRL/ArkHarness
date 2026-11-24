@@ -18,7 +18,7 @@ from harness.screen.flow import NavigationRecognition, execute
 from harness.screen.equip import equipment_funds_match
 from harness.screen.holdings import reconcile_holdings
 from harness.screen.read import CATALOG, Reader, expanded_shop_level, read_json, shop_reward_choices
-from harness.screen.state import require_return
+from harness.screen.state import require_action, require_return
 from harness.screen.withdraw import WithdrawRecognition
 from harness.track import Track
 
@@ -153,6 +153,24 @@ args = types.SimpleNamespace(image=np.zeros((720, 1280, 3), dtype=np.uint8),
 with patch("harness.screen.flow.Frame", return_value=types.SimpleNamespace(text=lambda name: "回合12")):
     assert nav.analyze(None, args) is not None
 require_return("ready-battle", {"round": 12}, nav.snapshot)
+
+# A tactical draft with its round HUD covered is a valid post-battle destination.
+tactic_screen = {"screen": "tacticSelection", "round": None, "canReady": False}
+require_return("wait-battle", {"round": 10}, tactic_screen)
+require_action("select-tactic", tactic_screen)
+
+# An accepted elite tactic applies once to the next normal operator gained by buying.
+live, _ = make(lambda _: None)
+live.gd = load()
+live.track = Track(live.gd, legacy_equip_snapshot=False)
+live.state.tactic_upgrades["chess"] = 1
+base_id = "chess_char_3_18_a"
+shop_state = {"self": {"shop": {"slots": [{"kind": "chess", "id": base_id}]}}}
+assert live.apply_confirmed_gain(ACT["BUY"], shop_state, base_id)
+assert {piece.id for piece in live.track.hand if piece} == {live.gd.golden_id_of(base_id)}
+assert live.state.tactic_upgrades["chess"] == 0
+assert live.apply_confirmed_gain(ACT["BUY"], shop_state, base_id)
+assert {piece.id for piece in live.track.hand if piece} == {base_id, live.gd.golden_id_of(base_id)}
 assert nav.snapshot == {"screen": "battle", "round": 12, "canReady": False}
 
 # A transition animation can hide the battle badge during the next passive observation.

@@ -67,6 +67,8 @@ class Frame:
             return "bountySelection"
         if self.hit("Supply.Screen"):
             return "equipmentSelection"
+        if self.hit("Tactic.Screen"):
+            return "tacticSelection"
         if self.hit("Screen.ReadyIcon"):
             if self.hit("Command.Panel"):
                 return "commandDetails"

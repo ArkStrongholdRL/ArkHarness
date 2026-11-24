@@ -13,6 +13,13 @@
       {"recognition": "OCR", "roi": [356, 21, 299, 43], "expected": "获得装备补给"}
     ]
   },
+  "Tactic.Screen": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "OCR", "roi": [165, 19, 215, 67], "expected": "战术决策"},
+      {"recognition": "OCR", "roi": [356, 21, 299, 57], "expected": "做好迎战准备|选定后将无法更改"}
+    ]
+  },
   "Bounty.NameLeft": {"recognition": "OCR", "roi": [279, 251, 178, 75]},
   "Bounty.NameCenter": {"recognition": "OCR", "roi": [621, 251, 178, 75]},
   "Bounty.NameRight": {"recognition": "OCR", "roi": [962, 251, 178, 75]},

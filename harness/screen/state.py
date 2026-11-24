@@ -10,7 +10,7 @@ PANELS = {"matchInfo", "enemyPreview", "bondDetail", "commandDetails", "directio
 INSPECTIONS = {"inspect-info", "inspect-enemies", "inspect-bond"}
 BRIEFING_ACTIONS = ("inspect-briefing", "select-bond-group")
 BATTLE_ACTIONS = {"start-battle", "ready-battle", "wait-battle"}
-DRAFT_SCREENS = {"bountySelection", "equipmentSelection"}
+DRAFT_SCREENS = {"bountySelection", "equipmentSelection", "tacticSelection"}
 INTERRUPT_SCREENS = {"preparation", "leaveConfirm", "entrance", "abandonConfirm", "matchInterrupted"}
 ENTRY_STATES = (
     ("disconnect", "Recovery.Notice"),
@@ -28,7 +28,7 @@ ENTRY_STATES = (
 
 LiveScreen = Literal[
     "briefing", "squadSelection", "specialSelection", "preparation", "enemyPreview", "rewardSelection",
-    "personalSelection", "equipmentSelection", "battle", "settlement", "matchEnded", "disconnect",
+    "personalSelection", "equipmentSelection", "tacticSelection", "battle", "settlement", "matchEnded", "disconnect",
     "title", "gameHome", "entrance", "operatorDetails", "matchInfo", "commandDetails", "bondDetail", "directionPicker", "unknown",
 ]
 LIVE_SCREENS: dict[str, LiveScreen] = {
@@ -36,6 +36,7 @@ LIVE_SCREENS: dict[str, LiveScreen] = {
     "squadSelection": "squadSelection",
     "bountySelection": "specialSelection",
     "equipmentSelection": "equipmentSelection",
+    "tacticSelection": "tacticSelection",
     "preparation": "preparation",
     "enemyPreview": "enemyPreview",
     "operatorDetails": "operatorDetails",
@@ -71,7 +72,7 @@ def screen_snapshot(frame: Frame) -> dict:
         screen = next((name for name, node in ENTRY_STATES if frame.hit(node)), None)
     current_round = None
     if screen is None or screen in {"preparation", "enemyPreview", "bondDetail", "commandDetails", "drag", "directionPicker",
-                                   "bountySelection", "equipmentSelection", "battle", "settlement"}:
+                                   *DRAFT_SCREENS, "battle", "settlement"}:
         current_round = integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)")
     snapshot = {
         "screen": screen or ("roundHud" if current_round is not None else "unknown"),
@@ -106,6 +107,8 @@ def require_action(action: str, before: dict) -> None:
     if action == "select-bounty" and screen == "bountySelection":
         return
     if action == "select-equipment" and screen == "equipmentSelection":
+        return
+    if action == "select-tactic" and screen == "tacticSelection":
         return
     if action == "enter-layout" and screen in {
         "gameHome", "entrance", "difficultySelection", "briefing", "strategySelection", "squadSelection", "preparation",

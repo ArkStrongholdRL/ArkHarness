@@ -37,8 +37,10 @@ ENTRIES = {
     "interrupt-match": ("Interrupt.End", "Interrupt.NewEntrance"),
     "select-bounty": ("Bounty.Select", "ArkReturnedRest"),
     "select-equipment": ("Bounty.Select", "ArkReturnedRest"),
+    "select-tactic": ("Bounty.Select", "ArkReturnedRest"),
     "recover-match": ("Recovery.Route", "Recovery.Returned"),
 }
+DRAFT_ACTIONS = {"select-bounty": "Bounty.Screen", "select-equipment": "Supply.Screen", "select-tactic": "Tactic.Screen"}
 ERRORS = {
     "Entry.SavedMatch": "A saved match is displayed at the entrance; no opening input was sent",
     "ArkUnexpectedScreen": "Expected the preparation anchor or a supported panel for close-panel",
@@ -121,7 +123,12 @@ class NavigationRecognition(CustomRecognition):
         if kind in {"bountyTarget", "bountyConfirm"} and self.reader is not None and self.bounty is not None:
             slot, card_id = self.bounty
             equipment = self.action == "select-equipment"
-            offer = self.reader.equipment_offer(frame, slot) if equipment else self.reader.bounties.offer(frame, slot)
+            if equipment:
+                offer = self.reader.equipment_offer(frame, slot)
+            elif self.action == "select-tactic":
+                offer = self.reader.tactic_offer(frame, slot)
+            else:
+                offer = self.reader.bounties.offer(frame, slot)
             if offer is None or offer[0]["id" if equipment else "effectId"] != card_id:
                 return None
             box = offer[1]
@@ -202,9 +209,9 @@ def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_m
     }
     if recognition.action == "ready-battle":
         override["ArkBattleStarted"] = {"enabled": True}
-    if recognition.action == "select-equipment":
-        override["Bounty.ClickSlot"] = {"all_of": ["Supply.Screen", "Bounty.ExpectedOffer"]}
-        override["Bounty.ConfirmSlot"] = {"all_of": ["Supply.Screen", "Bounty.ExpectedConfirmation"]}
+    if screen_node := DRAFT_ACTIONS.get(recognition.action):
+        override["Bounty.ClickSlot"] = {"all_of": [screen_node, "Bounty.ExpectedOffer"]}
+        override["Bounty.ConfirmSlot"] = {"all_of": [screen_node, "Bounty.ExpectedConfirmation"]}
     if scroll_preview:
         override["ArkOpenEnemyPreview"] = {"next": ["ArkScrollEnemyPreview"]}
         override["ArkCloseEnemyPreview"] = {"custom_recognition_param": "enemyPreviewScrolled"}
@@ -245,7 +252,7 @@ def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_m
         "ArkRestAfterBattle", "ArkBountyAfterBattle", "ArkMatchEnded", "ArkDisconnected",
     }
     if not job.succeeded or (last != terminal and not opening_stop and not battle_stop) or recognition.snapshot is None:
-        if recognition.action in {"select-bounty", "select-equipment"}:
+        if recognition.action in DRAFT_ACTIONS:
             if recognition.bounty_target_verified:
                 raise RuntimeError("Card selection did not return to the preparation anchor")
             raise RuntimeError("The card slot and ID did not match again; no input was sent")
@@ -398,7 +405,7 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
         require_return(action, {"round": battle_round}, recognition.snapshot)
         return {"startedRound": battle_round, "after": recognition.snapshot}
 
-    if action in {"select-bounty", "select-equipment"}:
+    if action in DRAFT_ACTIONS:
         if type(slot) is not int or not 0 <= slot < len(BOUNTY_SLOTS):
             raise ValueError("Card selection requires a zero-based slot from left to right")
         if expected_round is not None:
@@ -416,7 +423,7 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
             cards = (draft or {}).get("cards") or []
             card = cards[slot] if slot < len(cards) else None
             if not card or expected_id is not None and card["id"] != expected_id:
-                raise RuntimeError("The requested bounty offer changed or could not be read; no input was sent")
+                raise RuntimeError("The requested draft offer changed or could not be read; no input was sent")
         card_id = card["id"]
         recognition = NavigationRecognition(buttons, action, None, reader, before["round"], bounty=(slot, card_id))
         run_navigation(tasker, recognition, timeout_ms)
@@ -463,7 +470,7 @@ def main() -> None:
     parser.add_argument("--bond", help="Displayed bond name for inspect-bond")
     parser.add_argument("--commander", help="Displayed commander name for a new run with enter-layout")
     parser.add_argument("--slot", type=int, help="Zero-based draft slot from left to right")
-    parser.add_argument("--expected-id", help="Verified item ID for select-equipment")
+    parser.add_argument("--expected-id", help="Verified offer ID for card selection")
     parser.add_argument("--expected-round", type=int, help="Last known round for recover-match")
     parser.add_argument("--bond-group", type=int, choices=(0, 1), help="Briefing group from left to right")
     parser.add_argument("--stop-at", choices=ENTRY_CHECKPOINTS, help="Stop before confirming an opening page")
@@ -484,13 +491,15 @@ def main() -> None:
         parser.error("inspect-bond requires --bond")
     if args.commander is not None and (args.action not in {"enter-layout", "restart-match"} or not commander):
         parser.error("--commander requires enter-layout or restart-match and a displayed name")
-    card_action = args.action in {"select-bounty", "select-equipment"}
+    card_action = args.action in DRAFT_ACTIONS
     if card_action and args.slot not in range(len(BOUNTY_SLOTS)):
         parser.error("Card selection requires --slot 0, 1 or 2")
     if not card_action and args.slot is not None:
         parser.error("--slot requires a card selection action")
-    if (args.action == "select-equipment") != bool(args.expected_id):
-        parser.error("--expected-id is required for select-equipment")
+    if args.action in {"select-equipment", "select-tactic"} and not args.expected_id:
+        parser.error("--expected-id is required for select-equipment and select-tactic")
+    if args.expected_id and not card_action:
+        parser.error("--expected-id requires a card selection action")
     if (args.action == "recover-match") != (args.expected_round is not None):
         parser.error("--expected-round is required for recover-match")
     if args.action == "select-bond-group" and args.bond_group is None:

@@ -311,6 +311,8 @@ class Live:
         M["hiddenBossId"] = M.get("hiddenBossId") or self.state.hidden_boss_id
         M["spRound"] = bool(M.get("spRound"))
         S.setdefault("personalChoice", None)
+        if S["shop"].get("refreshPrice") == 0 and self.state.tactic_free_refreshes:
+            S["shop"]["freeRefreshes"] = self.state.tactic_free_refreshes
         if self.state.preview is not None and self.state.preview_round == M.get("round"):
             S["nextEnemies"] = [{k: e[k] for k in ("enemyKey", "count", "fly", "elite", "boss", "gate")} for e in self.state.preview]
         S["nextEnemies"] = S.get("nextEnemies") or []
@@ -454,31 +456,51 @@ class Live:
                   "result": r})
         self.save()
 
-    # ---------- bounty draft ----------
-    def bounty(self):
+    # ---------- combat drafts ----------
+    def draft(self, *, tactic=False):
+        kind = "tactic" if tactic else "bounty"
+        screen = "tacticSelection" if tactic else "specialSelection"
         s = self.read()
         if s["config"].get("modeId") is not None:
             self.use_mode(s["config"]["modeId"])
         if s["match"].get("round") is None:
             if self.state.round is None:
-                raise Stop("Bounty covers the round HUD and the previous round is unknown")
+                raise Stop(f"The {kind} draft covers the round HUD and the previous round is unknown")
             s["match"]["round"] = self.state.round + 1
         s["match"]["stageId"] = self.state.stage_id
         st = self.screen_state(s)
         cards = (st["match"].get("sp") or {}).get("cards") or []
-        if not any(cards):
-            self.soft_fail("bounty", "Bounty cards were not read")
+        if not any(cards) or (tactic and not all(cards)):
+            self.soft_fail(kind, f"The {kind} cards could not be read")
         a, row = self.decide(st, "card")
         i = a - ACT["CARD"]
         if not self.acting():
             self.log({**row, "result": "observe: not picked"})
-            return self.wait_change("specialSelection")
+            return self.wait_change(screen)
         card = cards[i]
-        with device_action(self.state, self.save, "bounty"):
-            rec = self.flow("select-bounty", slot=card["idx"], expected_id=card["id"], expected_round=st["match"]["round"])
-            self.track.record_bounty(rec)
+        buffs = self.gd.raw.get("effects", {}).get(card["id"], {}).get("buffs", []) if tactic else []
+        keys = {buff["key"] for buff in buffs}
+        areas = ()
+        if "single_special_choice_gain_bond_chess" in keys:
+            areas = ("hand", "board", "temp")
+        elif "global_special_choice_gain_equip" in keys:
+            areas = ("temp",)
+        with device_action(self.state, self.save, kind, areas):
+            rec = self.flow(f"select-{kind}", slot=card["idx"], expected_id=card["id"], expected_round=st["match"]["round"])
+            if tactic:
+                self.mark_holdings_dirty(*areas)
+                for buff in buffs:
+                    count = buff.get("bb", {}).get("count", 1)
+                    if buff["key"] == "global_special_choice_refresh_free":
+                        self.state.tactic_free_refreshes += count
+                    elif buff["key"] == "single_special_choice_gloden_char_chess":
+                        self.state.tactic_upgrades["chess"] = count
+                    elif buff["key"] == "single_special_choice_gloden_equip_chess":
+                        self.state.tactic_upgrades["item"] = count
+            else:
+                self.track.record_bounty(rec)
             self.state.round = rec["round"]
-        self.log({**row, "result": rec})
+        self.log({**row, "decision": "tactic draft" if tactic else row["decision"], "result": rec})
 
     def supply(self):
         if not self.acting():
@@ -565,11 +587,28 @@ class Live:
 
     def apply_confirmed_gain(self, action, st, chess_id):
         sources = self.track.merge_board_sources(chess_id) if chess_id else {}
-        if not self.track.apply(action, st):
+        if not self.track.apply(action, st, after_buy=self.apply_tactic_purchase):
             return False
         if len(sources) > 1:
             self.state.pending_board_merges.append({"id": self.gd.golden_id_of(chess_id), "sources": sources})
         return True
+
+    def apply_tactic_purchase(self, piece):
+        remaining = self.state.tactic_upgrades.get(piece.kind, 0)
+        if not remaining or self.gd.is_golden(piece.id):
+            return
+        if piece.kind == "chess":
+            upgraded = self.gd.golden_id_of(piece.id)
+        else:
+            item = self.gd.item(piece.id) or {}
+            upgraded = item.get("upgradeChessId") or item.get("goldenId")
+            if not self.gd.item(upgraded):
+                return
+            self.mark_holdings_dirty("temp")
+        if upgraded:
+            piece.id = upgraded
+            self.track._recompute()
+            self.state.tactic_upgrades[piece.kind] = remaining - 1
 
     def verify_board_merges(self, s):
         from .screen.board_read import find_board_piece
@@ -891,6 +930,8 @@ class Live:
             r = shop.change_shop(self.tasker, self.reader, {ACT["REFRESH"]: "refresh", ACT["LEVEL"]: "level", ACT["FREEZE"]: "freeze"}[a],
                                  frozen=True if a == ACT["FREEZE"] else None)
             self.track.apply(a, st)
+            if a == ACT["REFRESH"] and r["before"]["funds"] == r["after"]["funds"]:
+                self.state.tactic_free_refreshes = max(self.state.tactic_free_refreshes - 1, 0)
             return r
         if ACT["REWARD"] <= a < ACT["PERSONAL"]:
             raise Unsupported("reward pick (read / select chain not wired)")
@@ -1278,7 +1319,9 @@ class Live:
                     from .screen.shop import set_shop_open
                     set_shop_open(self.tasker, True)
                 elif screen == "specialSelection":
-                    self.bounty()
+                    self.draft()
+                elif screen == "tacticSelection":
+                    self.draft(tactic=True)
                 elif screen == "equipmentSelection":
                     self.supply()
                 elif screen in ("battle", "settlement"):
@@ -1313,7 +1356,7 @@ class Live:
             except (RuntimeError, ValueError) as e:
                 # An executor's verification failed. Never repeat the same action blindly: the next iteration observes,
                 # re-reads (areas touched by an unverified action are marked dirty) and decides again. Bounded per round.
-                if screen in ("preparation", "specialSelection", "equipmentSelection", "equipmentReward") and self._spend_retry("executor") <= RETRY_LIMIT:
+                if screen in ("preparation", "specialSelection", "tacticSelection", "equipmentSelection", "equipmentReward") and self._spend_retry("executor") <= RETRY_LIMIT:
                     self.screenshot("retry")
                     self.log({"screen": screen, "decision": "executor retry", "error": f"{type(e).__name__}: {e}"})
                     print(f"RETRY after executor error: {e}", flush=True)

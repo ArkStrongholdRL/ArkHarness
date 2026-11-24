@@ -32,6 +32,8 @@ class GameState:
     hidden_boss_id: str | None = None
     leader_template: str | None = None
     pending_equipment_reward: dict | None = None
+    tactic_free_refreshes: int = 0
+    tactic_upgrades: dict[str, int] = field(default_factory=dict)
     pending_board_merges: list[dict] = field(default_factory=list)
     pending_action: PendingAction | None = None
     layout_step: dict | None = None

@@ -73,7 +73,7 @@
   },
   "ArkBountyAfterBattle": {
     "recognition": "And", "all_of": [
-      {"recognition": "Or", "any_of": ["Bounty.Screen", "Supply.Screen"]}, "ArkSnapshot"
+      {"recognition": "Or", "any_of": ["Bounty.Screen", "Supply.Screen", "Tactic.Screen"]}, "ArkSnapshot"
     ]
   },
   "ArkMatchEnded": {

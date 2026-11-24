@@ -209,6 +209,7 @@ class Reader:
                 self.shop_names.setdefault(name, []).extend((kind, key, row) for key, row in entries)
         raw_cards = read_json(catalog / "choices.json")["cards"]
         self.bounties = BountyCatalog(raw_cards.get("bounty", []))
+        self.tactics = index_names({row["effectId"]: row for row in raw_cards.get("tactic", [])})
         self.cards = index_names({row["effectId"]: row for group in raw_cards.values()
                                   for row in group if row.get("effectId")})
 
@@ -274,17 +275,19 @@ class Reader:
         elif scene == "equipmentSelection":
             state["equipmentOffers"] = [offer[0] for slot in range(len(BOUNTY_SLOTS))
                                         if (offer := self.equipment_offer(frame, slot))]
-        elif scene == "bountySelection":
+        elif scene in ("bountySelection", "tacticSelection"):
             match["round"] = integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)")
             match["spRound"] = True
-            offers = [self.bounties.offer(frame, slot) for slot in range(len(BOUNTY_SLOTS))]
+            kind = "tactic" if scene == "tacticSelection" else "bounty"
+            read_offer = self.tactic_offer if kind == "tactic" else self.bounties.offer
+            offers = [read_offer(frame, slot) for slot in range(len(BOUNTY_SLOTS))]
             if any(offers):
                 cards = [None] * len(offers)
                 for slot, offer in enumerate(offers):
                     if offer:
                         data, _ = offer
                         card = {field: data.get(field) for field in CARD_FIELDS}
-                        cards[slot] = {**card, "idx": slot, "kind": "bounty", "id": data["effectId"], "soldOut": False}
+                        cards[slot] = {**card, "idx": slot, "kind": kind, "id": data["effectId"], "soldOut": False}
                 match["sp"] = {"cards": cards, "taken": None}
             if not all(offers):
                 incomplete.add("match.sp.cards")
@@ -293,6 +296,15 @@ class Reader:
 
         state["unread"] = sorted((unread_fields(state) | incomplete) - known_absent)
         return state
+
+    def tactic_offer(self, frame: Frame, slot: int) -> tuple[dict, tuple] | None:
+        suffix = BOUNTY_SLOTS[slot]
+        rows = sorted(frame.rows(f"Bounty.Name{suffix}"), key=lambda row: (row.box[1], row.box[0]))
+        name = clean("".join(row.text for row in rows))
+        candidates = self.tactics.get(name, [])
+        if len(candidates) != 1:
+            return None
+        return candidates[0][1], tuple(rows[0].box)
 
     def equipment_offer(self, frame: Frame, slot: int) -> tuple[dict, tuple] | None:
         suffix = BOUNTY_SLOTS[slot]
