@@ -1,7 +1,6 @@
 # ArkHarness
 
-卫戍协议：规程Harness。（还没做完捏）
-
+卫戍协议：规程Harness。（还没做完捏）由 MaaFramework 强力驱动！
 ```
 
 OCR 源目录需包含 `det.onnx`、`rec.onnx` 和 `keys.txt`。当前PP-OCRv6 small。引擎路径应指向含 `tools/rl/spec.mjs` 和 `tools/rl/py/model.py` 的训练版本，默认策略接口为 2570 维、100 个动作。

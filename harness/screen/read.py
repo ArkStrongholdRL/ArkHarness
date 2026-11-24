@@ -31,6 +31,7 @@ SHOP_FIELDS = ("level", "maxLevel", "upgradePrice", "refreshPrice", "freeRefresh
 CARD_FIELDS = ("idx", "kind", "id", "tier", "coin", "payout", "rounds", "enemyKey", "count",
                "soldOut", "team")
 ROMAN = dict(zip(("I", "II", "III", "IV", "V", "VI"), range(1, 7)))
+SHOP_UPGRADE_CENTERS = (63, 225, 387)
 ENEMY_PREVIEW_ALIASES = {"深池方阵战士": "深池方阵步兵"}
 SHOP_CHESS_NAME_ALIASES = {"w": "W", "伊桑·": "伊桑", "罗比拉塔": "罗比菈塔"}
 
@@ -84,9 +85,12 @@ def shop_upgrade_center(frame: Frame) -> int | None:
     headings = frame.rows("Shop.LevelHeading")
     if len(headings) == 1:
         x, _, width, _ = headings[0].box
-        return x + width // 2
+        heading_center = x + width // 2
+        for center in SHOP_UPGRADE_CENTERS:
+            if abs(heading_center - center) <= 28:
+                return center
     # The upgrade card moves left by one slot as the shop grows from four to six cards.
-    centers = [x for x in (63, 225, 387) if frame.hit(
+    centers = [x for x in SHOP_UPGRADE_CENTERS if frame.hit(
         "Shop.LevelHeading", roi=[x - 26, 567, 52, 18], only_rec=True, expected="^LEVEL$",
     )]
     return centers[0] if len(centers) == 1 else None
@@ -102,7 +106,8 @@ def expanded_shop_level(frame: Frame) -> int | None:
         for offset in (-22, 6)
     ):
         return 3 if frame.hit("Screen.ShopLevelStroke", roi=[center - 2, 590, 5, 29], count=85) else 2
-    level = tier(frame.text("Screen.ShopLevelExpanded", roi=[center - 22, 584, 44, 43]))
+    half_width = 30 if center == SHOP_UPGRADE_CENTERS[0] else 22
+    level = tier(frame.text("Screen.ShopLevelExpanded", roi=[center - half_width, 584, 2 * half_width, 43]))
     if level is None:
         # The wider crop can pick up neighboring strokes on the level III badge.
         level = tier(frame.text("Screen.ShopLevelExpanded", roi=[center - 19, 585, 38, 43]))

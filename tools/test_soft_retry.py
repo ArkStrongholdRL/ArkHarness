@@ -17,7 +17,7 @@ from harness.layout_recovery import recover_layout_step
 from harness.screen.flow import NavigationRecognition, execute
 from harness.screen.equip import equipment_funds_match
 from harness.screen.holdings import reconcile_holdings
-from harness.screen.read import CATALOG, Reader, read_json, shop_reward_choices
+from harness.screen.read import CATALOG, Reader, expanded_shop_level, read_json, shop_reward_choices
 from harness.screen.state import require_return
 from harness.screen.withdraw import WithdrawRecognition
 from harness.track import Track
@@ -344,6 +344,14 @@ with (patch("harness.layout_recovery.set_shop_open", return_value={"before": hud
         raise AssertionError("An inconclusive probe must not update the ledger")
 assert not read_slots.called and read_tiles.call_args.args[3] == [(10, 4), (10, 5)]
 assert tr.board == {"10,4": operator} and operator.dir == "LEFT"
+
+# A drifting LEVEL text box must leave the calibrated IV digit crop fixed.
+for heading_box in ((18, 562, 76, 22), (28, 557, 94, 31)):
+    frame = types.SimpleNamespace(
+        rows=lambda _: [types.SimpleNamespace(box=heading_box)],
+        text=lambda _, *, roi: "IV" if roi == [33, 584, 60, 43] else "V",
+    )
+    assert expanded_shop_level(frame) == 4
 
 # Recover observed shop OCR variants without guessing unrelated card names.
 reader = Reader(CATALOG, read_json(Path(__file__).resolve().parent.parent / "calib/slots.json"))

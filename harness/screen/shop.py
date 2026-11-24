@@ -173,6 +173,8 @@ class BuyRecognition(CustomRecognition):
             return self.target(frame, current_round, level, funds, pending=True)
         purchase = self.purchase
         if (current_round, level, funds) != (purchase["round"], purchase["shopLevel"], purchase["fundsBefore"]):
+            self.reason = (f"Confirmation read round={current_round}, shop level={level}, funds={funds}; "
+                           f"expected {purchase['round']}, {purchase['shopLevel']}, {purchase['fundsBefore']}")
             return None
         confirmation = shop_confirm_box(frame, self.position)
         if confirmation is not None and self.expected_price is not None:
