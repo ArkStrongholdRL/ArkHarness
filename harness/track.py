@@ -41,6 +41,7 @@ class Piece:
     count: int = 1  # token stack size (not on the ScreenState)
     dir: str | None = "RIGHT"
     bought: int = 0  # the round we got it (legacy's keepFresh guard reads boughtRound); 0 = unknown / earlier
+    promotion_round: int | None = None  # an equipped normal Doctor Projection is due at this round start
 
 
 def _num(v) -> float:
@@ -651,6 +652,31 @@ class Track:
         self._check_item_merges()
         self._recompute()
         return True
+
+    def promote(self, holder: Piece) -> str | None:
+        """Promote in place, retaining the operator's UID, position and other equipment."""
+        if holder.kind != "chess" or self.gd.is_golden(holder.id):
+            return None
+        elite_id = self.gd.golden_id_of(holder.id)
+        if not elite_id:
+            return None
+        holder.id = elite_id
+        self._recompute()
+        if holder in self.board.values():
+            self._grant_tokens_for(holder)
+        return elite_id
+
+    def apply_due_promotions(self, round_number: int) -> list[dict]:
+        results = []
+        for holder in self._all_chess():
+            for item in holder.items.copy():
+                if item.promotion_round is None or item.promotion_round > round_number:
+                    continue
+                holder.items.remove(item)
+                before = holder.id
+                self.promote(holder)
+                results.append({"item": item.uid, "target": holder.uid, "before": before, "after": holder.id})
+        return results
 
     def equip(self, item_uid, target_uid, replace_uid=None) -> bool:
         """sidecar `equip {item, target}`: a loose item onto a chess (at most 2; a full carrier replaces replace_uid or the oldest)."""

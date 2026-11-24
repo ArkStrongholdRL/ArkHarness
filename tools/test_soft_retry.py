@@ -386,6 +386,64 @@ for item_id, kind in (("chess_item_4_15_e_a", "item"), ("chess_item_5_02_e_a", "
     assert drag.call_args.kwargs["opens_choice"] and live.state.pending_equipment_reward["kind"] == kind
     assert live.track._loc_by_uid(operation["item"])
 
+# Doctor Projection upgrades in place, and a normal projection survives a checkpoint and an operator move.
+for item_id, delayed in (("chess_item_5_04_e_a", True), ("chess_item_5_04_e_b", False)):
+    live, operation, carrier = equipment_live(item_id, worn=("chess_item_1_01_e_a", "chess_item_1_02_e_a"))
+    normal_id = carrier.id
+    elite_id = gd.golden_id_of(normal_id)
+    with (patch("harness.screen.equip.equip_to_board", return_value={"before": {"funds": 4}}) as drag,
+          patch("harness.screen.equip_choice.choose_equipment_dialog", return_value={"round": 5, "funds": 4}),
+          patch("harness.screen.equip.verify_rack_source")):
+        receipt = live.apply_equipment(operation, board, 5)
+    assert drag.call_args.kwargs["expected_gain"] == 0
+    assert live.track._loc_by_uid(operation["item"]) is None
+    if delayed:
+        assert carrier.id == normal_id and receipt["promotionRound"] == 6
+        assert carrier.items[-1].uid == operation["item"]
+        live.apply_round_promotions(5)
+        assert carrier.id == normal_id
+        assert live.track.bench(carrier.uid)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            save_checkpoint(path, live.state, live.track, Path("policy.pt"))
+            live.track = Track(gd, legacy_equip_snapshot=False)
+            assert restore_track(live.track, load_checkpoint(path))
+        carrier = live.track._loc_by_uid(operation["target"])["piece"]
+        live.apply_round_promotions(6)
+        assert live.track._loc_by_uid(carrier.uid)["area"] == "hand"
+        assert live.track.apply_due_promotions(6) == []
+    else:
+        assert receipt["promotedTo"] == elite_id and receipt["consumed"] and receipt["replan"]
+        assert live.track.board["9,4"] is carrier
+    assert carrier.uid == operation["target"] and carrier.id == elite_id
+    assert [it.id for it in carrier.items] == ["chess_item_1_02_e_a"]
+
+live, operation, carrier = equipment_live("chess_item_5_04_e_a")
+with patch("harness.screen.equip.equip_to_board", return_value={}):
+    live.apply_equipment(operation, board, 5)
+assert live.track.destroy_chess(carrier.uid)
+assert live.track.apply_due_promotions(6) == []
+assert live.track._loc_by_uid(operation["item"])["area"] == "temp"
+
+live, operation, carrier = equipment_live("chess_item_5_04_e_b")
+with patch("harness.screen.equip.equip_to_board", side_effect=RuntimeError("rack not cleared")):
+    try:
+        live.apply_equipment(operation, board, 5)
+    except RuntimeError as error:
+        assert "rack not cleared" in str(error)
+    else:
+        raise AssertionError("An unverified projection was applied")
+assert carrier.id == "chess_char_1_05_a" and live.track._loc_by_uid(operation["item"])["area"] == "temp"
+carrier.id = gd.golden_id_of(carrier.id)
+with patch("harness.screen.equip.equip_to_board") as drag:
+    try:
+        live.apply_equipment(operation, board, 5)
+    except Stop as error:
+        assert "requires an operator that can be promoted" in str(error)
+    else:
+        raise AssertionError("An already elite operator was accepted")
+    drag.assert_not_called()
+
 assert equipment_funds_match(3, None, (1, 6)) and not equipment_funds_match(7, None, (1, 6))
 assert equipment_funds_match(0, None, (0, None)) and not equipment_funds_match(-1, None, (0, None))
 dr = [{"kind": "chess", "sold": True}, {"kind": "item", "id": "offer", "price": 0, "sold": False}]

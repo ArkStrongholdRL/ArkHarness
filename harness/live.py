@@ -50,6 +50,8 @@ TIMEOUT_MS = 180_000
 UNKNOWN_RETRIES = 4
 LIVE_MODES = {f"mode_single_{level}" for level in range(10, 21)}
 INCOME_DOLL_EFFECTS = {"gain_coin_when_round_start", "use_equip_gain_coin_when_next_round_start"}
+PROJECTION_NEXT_ROUND = "equip_round_start_upgrade_char"
+PROJECTION_IMMEDIATE = "use_equip_upgrade_char"
 EQUIPMENT_REWARDS = {
     "use_equip_spe_goods_first_bond": "chess",
     "use_equip_spe_goods_equip": "item",
@@ -472,6 +474,7 @@ class Live:
             if self.state.round is None:
                 raise Stop(f"The {kind} draft covers the round HUD and the previous round is unknown")
             s["match"]["round"] = self.state.round + 1
+        self.apply_round_promotions(s["match"]["round"])
         s["match"]["stageId"] = self.state.stage_id
         st = self.screen_state(s)
         cards = (st["match"].get("sp") or {}).get("cards") or []
@@ -519,6 +522,7 @@ class Live:
             rnd = self.state.round + 1
         if rnd is None:
             raise Stop("The supply draft covers the round HUD and no previous round is saved")
+        self.apply_round_promotions(rnd)
         offer = max(offers, key=lambda card: (
             not (card["kind"] or "").startswith("consume_on_equip"), card["tier"] or 0, -card["idx"],
         ))
@@ -655,6 +659,14 @@ class Live:
             layout.setdefault(tuple(step["target"]), (self.name(step["id"]), None))
         return layout
 
+    def apply_round_promotions(self, rnd):
+        if type(rnd) is not int:
+            return
+        promotions = self.track.apply_due_promotions(rnd)
+        if promotions:
+            self.save()
+            self.log({"screen": "preparation", "round": rnd, "decision": "Doctor Projection", "result": promotions})
+
     def refresh_holdings(self, s, board):
         """Carry the ledger into prep and read only areas affected by unknown changes."""
         from .screen.holdings import reconcile_holdings, scan_holdings
@@ -755,6 +767,7 @@ class Live:
             self.soft_fail("round", "the preparation round changed while opening the shop")
         self.state.round = rnd
         self.use_mode(s["config"].get("modeId"))
+        self.apply_round_promotions(rnd)
         step = self.state.layout_step
         if step and "uid" in step:
             from .layout_recovery import recover_layout_step
@@ -986,6 +999,10 @@ class Live:
         kind = record.get("kind") or ""
         params = record.get("params") or {}
         effect = next((b.get("key") for b in record.get("buffs") or []), None)
+        projection = effect in {PROJECTION_NEXT_ROUND, PROJECTION_IMMEDIATE}
+        if projection and (carrier.kind != "chess" or self.gd.is_golden(carrier.id)
+                           or not self.gd.golden_id_of(carrier.id)):
+            raise Unsupported("Doctor Projection requires an operator that can be promoted")
         reward_kind = EQUIPMENT_REWARDS.get(effect)
         round_income = self.rules.effect_key(item.id) in INCOME_DOLL_EFFECTS
         gain_range = None
@@ -993,13 +1010,14 @@ class Live:
             gain_range = (params["min"], params["max"])
         elif effect == "equip_destory_gain_coin":
             gain_range = (max(params.get("value", 0), 0), None)
-        consumes = bool(reward_kind or round_income or gain_range or effect in EQUIPMENT_MUTATIONS)
-        if kind.startswith("consume_on_equip") and not consumes:
+        consumes = bool(reward_kind or round_income or gain_range or effect in EQUIPMENT_MUTATIONS
+                        or effect == PROJECTION_IMMEDIATE)
+        if kind.startswith("consume_on_equip") and not (consumes or projection):
             raise Unsupported(f"equipment effect for {name}")
         if effect == "equip_tier_recr_gift" and (self.gd.chess(carrier.id) or {}).get("chessType") == "DIY":
             raise Unsupported("Beacon cannot be equipped to a custom operator")
         dirty = EQUIPMENT_MUTATIONS.get(effect, ())
-        expected_gain = 0 if consumes and not reward_kind and gain_range is None else None
+        expected_gain = 0 if (consumes or projection) and not reward_kind and gain_range is None else None
         if gain_range and gain_range[0] == gain_range[1] and gain_range[0] > 0:
             expected_gain, gain_range = gain_range[0], None
         areas = tuple(sorted({"temp", target["area"], *dirty}))
@@ -1031,15 +1049,20 @@ class Live:
                 self.reader.reward_kind_hint = None if reward_kind == "command" else reward_kind
             elif consumes:
                 if not self.track.destroy(item_uid):
-                    self.mark_holdings_dirty("temp")
+                    self.mark_holdings_dirty(*(areas if projection else ("temp",)))
+                elif effect == PROJECTION_IMMEDIATE:
+                    receipt["promotedTo"] = self.track.promote(carrier)
                 if effect == "equip_use_deploy":
                     self.state.deploy_cap_floor = self.reader.deploy_cap_floor = max(
                         self.state.deploy_cap_floor, params.get("count", 9))
                 self.mark_holdings_dirty(*dirty)
                 receipt["consumed"] = True
-                receipt["replan"] = effect in EQUIPMENT_MUTATIONS
+                receipt["replan"] = effect in EQUIPMENT_MUTATIONS or effect == PROJECTION_IMMEDIATE
             elif not self.track.equip(item_uid, target_uid, replace_uid=replace.uid if replace else None):
                 self.mark_holdings_dirty(*areas)
+            elif effect == PROJECTION_NEXT_ROUND:
+                item.promotion_round = rnd + 1
+                receipt["promotionRound"] = item.promotion_round
             if (receipt.get("slotAfter") or {}).get("status") == "occupied":
                 self.mark_holdings_dirty("temp")
         return {"item": item_uid, "target": target_uid, **receipt}
