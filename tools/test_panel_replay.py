@@ -11,6 +11,7 @@ from harness.screen.briefing import choose_bond_group, inspect_briefing
 from harness.screen.capture import OCR_RESOURCE, load_ocr
 from harness.screen.command import inspect_command
 from harness.screen.equip_choice import choose_equipment_dialog
+from harness.screen.equipment_read import read_equipment_slots
 from harness.screen.read import CATALOG
 from tools.test_shop_replay import ReplayController
 
@@ -119,6 +120,42 @@ def briefing_groups(tasker, controller):
     tasker.resource.unregister_custom_recognition("ReplayStrategy")
 
 
+class RackReplay(ReplayController):
+    def __init__(self):
+        super().__init__()
+        self.moves = []
+
+    def touch_move(self, contact, x, y, pressure):
+        self.moves.append((x, y))
+        return True
+
+
+def equipment_rack():
+    controller = RackReplay()
+    assert controller.set_screenshot_use_raw_size(True)
+    assert controller.post_connection().wait().succeeded
+    tasker = load_ocr(controller, OCR_RESOURCE)
+    post_task = tasker.post_task
+    overrides = {
+        "EquipmentRead.Pick": {"all_of": ["EquipmentRead.Before"]},
+        "EquipmentRead.Held": {"all_of": ["EquipmentRead.ReadName"]},
+    }
+    reader = SimpleNamespace(slots={"equipment": {"centersByView": {"shopExpanded": [[400, 400], [500, 400]]},
+                                                  "liftOffset": [0, -100]}})
+    view = {"after": {"round": 9, "funds": 4}, "clicked": False}
+    identity = {"name": "精打细算玩偶", "id": "item", "baseId": "item", "candidateIds": ["item"]}
+    with (patch.object(tasker, "post_task", side_effect=lambda entry, params: post_task(
+              entry, {**params, **{name: {**params.get(name, {}), **patch}
+                                  for name, patch in overrides.items()}})),
+          patch("harness.screen.equipment_read.Frame", return_value=SimpleNamespace(hit=lambda _: False)),
+          patch("harness.screen.equipment_read.hud_status", return_value=(9, 4)),
+          patch("harness.screen.equipment_read.set_shop_open", return_value=view),
+          patch("harness.screen.equipment_read.catalog_identity", return_value=identity)):
+        result = read_equipment_slots(tasker, reader, [1])
+    assert result == {"round": 9, "funds": 4, "slots": [{"screenSlot": 1, "status": "occupied", **identity}]}
+    assert controller.clicks == [(500, 400)] and controller.moves == [(500, 300), (35, 690)]
+
+
 def main():
     Tasker.set_log_dir(Path("debug/mfw-panel-replay").resolve())
     Tasker.set_save_draw(False)
@@ -130,6 +167,7 @@ def main():
     equipment_choice(tasker, controller)
     command_details(tasker, controller)
     briefing_groups(tasker, controller)
+    equipment_rack()
     print("MFW panel replay passed")
 
 
