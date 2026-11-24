@@ -8,11 +8,19 @@
     "rate_limit": 350,
     "timeout": 45000
   },
-  "Entry.OpenEvent": {"next": ["Entry.EventEntrance", "Entry.ClickEvent"], "timeout": 6000},
+  "Entry.OpenEvent": {"next": ["Entry.EventEntrance", "Entry.ClickEventToEntrance"], "timeout": 6000},
   "Entry.ClickEvent": {
-    "recognition": "And", "all_of": ["Lifecycle.GameHome", "Entry.EventBanner"],
-    "box_index": 1, "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "recognition": "And", "all_of": ["Entry.EventFromHome"],
+    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
     "next": ["Entry.Route"], "timeout": 20000
+  },
+  "Entry.ClickEventToEntrance": {
+    "recognition": "And", "all_of": ["Entry.EventFromHome"],
+    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "next": ["Entry.EventEntrance"], "timeout": 20000
+  },
+  "Entry.EventFromHome": {
+    "recognition": "And", "all_of": ["Lifecycle.GameHome", "Entry.EventBanner"], "box_index": 1
   },
   "Entry.EventEntrance": {"recognition": "And", "all_of": ["Lifecycle.Entrance", "ArkSnapshot"]},
   "Lifecycle.GameHome": {

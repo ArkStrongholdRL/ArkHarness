@@ -215,10 +215,6 @@ def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_m
     if scroll_preview:
         override["ArkOpenEnemyPreview"] = {"next": ["ArkScrollEnemyPreview"]}
         override["ArkCloseEnemyPreview"] = {"custom_recognition_param": "enemyPreviewScrolled"}
-    if recognition.action == "interrupt-match":
-        override["Interrupt.ConfirmLeave"] = {"next": ["Interrupt.ContinueToAbandon"]}
-    if recognition.action == "open-entrance":
-        override["Entry.ClickEvent"] = {"next": ["Entry.EventEntrance"]}
     if checkpoint is not None:
         override["Entry.SavedMatch"] = {"enabled": True}
         override["Entry.SoloButton"] = {"expected": "^独立模拟$"}
