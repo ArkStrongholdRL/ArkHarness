@@ -14,7 +14,7 @@ from .native import Frame, completed_data
 from .session import task_recognition
 from .read import (
     CATALOG, ROOT, Reader, clean, expanded_shop_level, integer, read_json, shop_frozen,
-    shop_confirm_box, shop_reward_choices, shop_upgrade_center, shop_upgrade_price,
+    shop_confirm_box, shop_reward_choices, shop_reward_phase, shop_upgrade_center, shop_upgrade_price,
 )
 
 
@@ -192,7 +192,8 @@ class BuyRecognition(CustomRecognition):
             return reject(f"Post-click check read funds={funds}, sold={sold}")
         if self.merge or not sold:
             positions = self.reader.shop_positions(self.reader.read_mode(frame), level)
-            if shop_reward_choices(self.reader.read_shop_slots(frame, positions)):
+            if (shop_reward_phase(frame) is True
+                    or shop_reward_choices(self.reader.read_shop_slots(frame, positions))):
                 return receipt({**purchase, "fundsAfter": funds, "sold": sold, "rewardOpened": True})
         if not sold:
             if purchase["price"] > 0:
@@ -212,13 +213,15 @@ class RewardRecognition(BuyRecognition):
                pending: bool = False, quote: bool = False) -> CustomRecognition.AnalyzeResult | None:
         positions = self.reader.shop_positions(self.reader.read_mode(frame), level)
         slots = self.reader.read_shop_slots(frame, positions, reward_kind=self.reward_kind)
-        choices = shop_reward_choices(slots, min_cards=1, kind=self.reward_kind or "chess")
+        reward_phase = shop_reward_phase(frame) is True
+        choices = shop_reward_choices(slots, min_cards=1, kind=self.reward_kind or "chess", reward_phase=reward_phase)
         offer = {str(index): card["id"] for index, card in choices}
         if offer.get(str(self.slot)) != self.expected_id:
             return reject("The requested free reward was not visible")
         result = super().target(frame, current_round, level, funds, pending=pending, quote=quote)
         if result is not None:
             result.detail["offer"] = offer
+            result.detail["rewardPhase"] = reward_phase
         return result
 
     def confirm(self, frame: Frame, current_round: int, level: int, funds: int,
@@ -236,10 +239,14 @@ class RewardRecognition(BuyRecognition):
             return None
         if shop_confirm_box(frame, prior["position"]):
             return reject("The free reward still awaits confirmation")
+        phase = shop_reward_phase(frame)
+        if phase is False and prior["rewardPhase"]:
+            return receipt({**purchase, "fundsAfter": funds, "rewardClaimed": True})
         positions = self.reader.shop_positions(self.reader.read_mode(frame), level)
         slots = self.reader.read_shop_slots(frame, positions, reward_kind=self.reward_kind)
-        paid_shop = sum(bool(card and card["id"] and (card["price"] or 0) > 0) for card in slots) >= 2
-        choices = shop_reward_choices(slots, min_cards=1, kind=self.reward_kind or "chess")
+        paid_shop = (phase is not True
+                     and sum(bool(card and card["id"] and (card["price"] or 0) > 0) for card in slots) >= 2)
+        choices = shop_reward_choices(slots, min_cards=1, kind=self.reward_kind or "chess", reward_phase=phase is True)
         offer = prior["offer"]
         replaced = sum(str(index) in offer and card["id"] != offer[str(index)] for index, card in choices)
         if not paid_shop and replaced < 2:

@@ -718,7 +718,7 @@ class Live:
         cmd = self.rules.command_start(st)
         if cmd and "effectId" in cmd:
             raise Unsupported(f"prep-start command {cmd['effectId']} (active command executor not wired)")
-        if self.acting() and not s["self"]["shop"].get("rewardOffer"):
+        if self.acting() and not any(s["self"]["shop"].get(key) for key in ("rewardOffer", "rewardPending")):
             for operation in self.rules.pager(st):
                 carrier = self.track._loc_by_uid(operation["carrier"])
                 if carrier and carrier["area"] == "board":
@@ -742,8 +742,9 @@ class Live:
             self._shop_open = True
         s = self.read()
         rnd = s["match"]["round"]
+        shop = s["self"]["shop"]
         if chained and (rnd is None or rnd != self.state.round or s["self"].get("funds") is None
-                        or s["self"]["shop"].get("refreshPrice") is None):
+                        or (shop.get("refreshPrice") is None and not shop.get("rewardPending"))):
             self._shop_open = False  # not provably the same expanded preparation: observe again, no input sent
             return
         if shop_view is not None and rnd != shop_view["after"]["round"]:
@@ -768,7 +769,7 @@ class Live:
         if self.state.pending_equipment_reward and self.acting():
             self.finish_reward(s)
             s = self.read()
-        if s["self"]["shop"].get("rewardOffer"):
+        if s["self"]["shop"].get("rewardOffer") or s["self"]["shop"].get("rewardPending"):
             self.finish_reward(s)
             if not self.acting() and not self.a.once:
                 return self.wait_change("preparation", rnd)
@@ -1064,24 +1065,31 @@ class Live:
         rnd = s["match"]["round"] or self.state.round
         if reward_kind == "command":
             return self.finish_command_reward(pending, rnd)
-        choices = shop_reward_choices(s["self"]["shop"].get("slots") or [], kind=reward_kind)
-        if pending and not choices:
-            # The cards slide into their calibrated slots after the pager is used.
+        def visible_choices(screen, min_cards=3):
+            shop = screen["self"]["shop"]
+            phase = bool(shop.get("rewardPending"))
+            return shop_reward_choices(shop.get("slots") or [], min_cards=1 if phase else min_cards,
+                                       kind=reward_kind, reward_phase=phase)
+
+        choices = visible_choices(s)
+        if (pending or s["self"]["shop"].get("rewardPending")) and not choices:
+            # Reward controls can change before the cards finish sliding into place.
             deadline = time.monotonic() + 3
             while not choices and time.monotonic() < deadline:
                 time.sleep(0.15)
                 s = self.read()
                 current_round = s["match"]["round"]
                 if current_round is not None and current_round != rnd:
-                    raise Stop("The round changed while waiting for the pager reward")
+                    raise Stop("The round changed while waiting for the shop reward")
                 if current_round == rnd:
-                    choices = shop_reward_choices(s["self"]["shop"].get("slots") or [], kind=reward_kind)
-            if not choices and s["match"]["round"] == rnd:
-                choices = shop_reward_choices(s["self"]["shop"].get("slots") or [], min_cards=1, kind=reward_kind)
+                    choices = visible_choices(s)
+            if pending and not choices and s["match"]["round"] == rnd:
+                choices = visible_choices(s, min_cards=1)
         if not choices:
             paid = [card for card in s["self"]["shop"].get("slots") or []
                     if card and card.get("id") and (card.get("price") or 0) > 0]
-            if pending and s["match"]["round"] == rnd and len(paid) >= 2:
+            if (pending and not s["self"]["shop"].get("rewardPending")
+                    and s["match"]["round"] == rnd and len(paid) >= 2):
                 return self.reconcile_closed_equipment_reward(pending, s)
             raise RuntimeError(f"No {reward_kind} reward was verified in the expanded shop")
         areas = {"hand"} & set(self.state.dirty_areas)

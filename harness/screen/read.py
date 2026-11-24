@@ -45,12 +45,25 @@ def shop_frozen(frame: Frame) -> bool | None:
     return {"冻结": False, "解冻": True, "解除冻结": True}.get(clean(frame.text("Shop.FreezeText")))
 
 
+def shop_reward_phase(frame: Frame) -> bool | None:
+    """Classify the freeze button on an already verified expanded shop."""
+    if frame.hit("Shop.FreezeDisabledColor"):
+        return True
+    if frame.hit("Shop.FreezeEnabledColor"):
+        return False
+    return None
+
+
 def shop_reward_choices(slots: list[dict | None], *, min_cards: int = 3,
-                        kind: str = "chess") -> list[tuple[int, dict]]:
+                        kind: str = "chess", reward_phase: bool = False) -> list[tuple[int, dict]]:
     """Identify free rewards of the expected kind and their engine slots."""
-    if any(slot is None for slot in slots):
+    if not reward_phase and any(slot is None for slot in slots):
         return []
-    choices = [(index, slot) for index, slot in enumerate(slots) if not slot["sold"]]
+    choices = [(index, slot) for index, slot in enumerate(slots) if slot is not None and not slot["sold"]]
+    if reward_phase:
+        if any((card["price"] or 0) > 0 for _, card in choices):
+            return []
+        choices = [(index, card) for index, card in choices if card["kind"] == kind and card["price"] == 0]
     if not min_cards <= len(choices) <= 3 or any(card["kind"] != kind or card["price"] != 0
                                                  for _, card in choices):
         return []
@@ -431,6 +444,9 @@ class Reader:
         shop["upgradePrice"] = shop_upgrade_price(frame)
         shop["refreshPrice"] = integer(frame.text("Screen.RefreshPrice"))
         shop["frozen"] = shop_frozen(frame)
+        reward_phase = shop_reward_phase(frame) is True
+        if reward_phase:
+            shop["rewardPending"] = True
         positions = self.shop_positions(mode, shop["level"])
         if not positions:
             return True
@@ -438,7 +454,8 @@ class Reader:
         if any(value is None for value in output):
             incomplete.add("self.shop.slots")
         shop["slots"] = output
-        choices = shop_reward_choices(output, kind=self.reward_kind_hint or "chess")
+        choices = shop_reward_choices(output, min_cards=1 if reward_phase else 3,
+                                      kind=self.reward_kind_hint or "chess", reward_phase=reward_phase)
         if choices:
             shop["rewardOffer"] = {"slots": [card for _, card in choices]}
         return True

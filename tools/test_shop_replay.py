@@ -51,7 +51,9 @@ class ReplayFrame:
     def hit(self, name, **_):
         return (name == "ArkRestText" or (name == "Shop.Expanded" and self.state.get("expanded", False))
                 or (name == "Shop.ConfirmLevelText" and self.state.get("confirmation") == "level")
-                or (name == "Screen.ShopSold" and self.state.get("sold", False)))
+                or (name == "Screen.ShopSold" and self.state.get("sold", False))
+                or (name == "Shop.FreezeDisabledColor" and self.state.get("rewardPhase") is True)
+                or (name == "Shop.FreezeEnabledColor" and self.state.get("rewardPhase") is False))
 
     def scene(self):
         return "preparation"
@@ -133,6 +135,9 @@ def main():
         assert result["fundsAfter"] == 2 and result["sold"]
     result = replay(tasker, controller, [IDLE, {**paid, "sold": False}], purchase, clicks=[card_click])
     assert result["soldMarkerMissing"]
+    result = replay(tasker, controller, [IDLE, {**paid, "rewardPhase": True, "cards": [None]}],
+                    lambda: buy_slot(tasker, reader, 0, merge=True), clicks=[card_click])
+    assert result["rewardOpened"]
     replay(tasker, controller, [IDLE, IDLE], purchase, clicks=[card_click], error="Purchase attempted once")
     replay(tasker, controller, [{**IDLE, "confirmation": "buy"}, paid], purchase,
            clicks=[], error="No purchase was sent")
@@ -145,6 +150,15 @@ def main():
                     lambda: pick_reward(tasker, reader, 0, expected_id="operator", expected_round=9),
                     clicks=[card_click])
     assert result["rewardClaimed"] and result["fundsBefore"] == result["fundsAfter"]
+    partial_reward = {**reward, "rewardPhase": True, "cards": [FREE_CARD, None]}
+    normal_shop = {**reward, "rewardPhase": False, "cards": [None, None]}
+    claim = lambda: pick_reward(tasker, reader, 0, expected_id="operator", expected_round=9)
+    result = replay(tasker, controller,
+                    [partial_reward, {**partial_reward, "confirmation": "buy"}, normal_shop],
+                    claim, clicks=[card_click, click])
+    assert result["rewardClaimed"]
+    replay(tasker, controller, [partial_reward, {**paid_shop, "rewardPhase": True}], claim,
+           clicks=[card_click], error="Purchase attempted once")
     refresh = lambda: change_shop(tasker, reader, "refresh")
     result = replay(tasker, controller, [IDLE, {**IDLE, "funds": 3}], refresh, clicks=[click])
     assert result["before"]["funds"] == 4 and result["after"]["funds"] == 3

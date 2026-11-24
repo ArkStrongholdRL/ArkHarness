@@ -87,6 +87,14 @@
     "custom_recognition_param": "verify"
   },
   "Shop.FreezeText": {"recognition": "OCR", "roi": [970, 434, 146, 50], "expected": "^(冻结|解冻|解除冻结)$"},
+  "Shop.FreezeDisabledColor": {
+    "recognition": "ColorMatch", "roi": [1028, 445, 12, 22], "method": 40,
+    "lower": [0, 0, 105], "upper": [179, 15, 150], "count": 220
+  },
+  "Shop.FreezeEnabledColor": {
+    "recognition": "ColorMatch", "roi": [1028, 445, 12, 22], "method": 40,
+    "lower": [93, 65, 205], "upper": [111, 200, 255], "count": 220
+  },
   "Shop.RefreshText": {"recognition": "OCR", "roi": [1116, 434, 148, 49], "expected": "^刷新$"},
   "Shop.LevelHeading": {"recognition": "OCR", "roi": [0, 550, 443, 41], "expected": "^(LEVEL|LEVE|LEV|LV)$"},
   "Shop.LevelText": {"recognition": "OCR", "roi": [0, 630, 443, 71], "expected": "^升级$"},
