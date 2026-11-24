@@ -15,7 +15,8 @@ from harness.rules import Rules
 from harness.layout import plan_layout
 from harness.layout_recovery import recover_layout_step
 from harness.screen.flow import NavigationRecognition, execute
-from harness.screen.deploy import DeployRecognition
+from harness.screen.deploy import DeployRecognition, read_board
+from harness.screen.board_read import read_board_tiles
 from harness.screen.equip import equipment_funds_match
 from harness.screen.holdings import reconcile_holdings
 from harness.screen.read import CATALOG, Reader, expanded_shop_level, read_json, shop_reward_choices
@@ -164,6 +165,41 @@ with patch("harness.screen.deploy.Frame", return_value=hud):
     assert deployment.analyze(None, types.SimpleNamespace(image=args.image, custom_recognition_param='"pick"')) == (
         940, 610, 1, 1)
 assert (deployment.round, deployment.remaining) == (9, 1)
+
+# A transient empty hit on a saved tile retries only that tile when the HUD still counts its occupant.
+layout = {(9, 3): ("赫德雷", "RIGHT"), (9, 4): ("佩佩", "LEFT")}
+inspected = []
+board_tasker = types.SimpleNamespace(resource=types.SimpleNamespace())
+
+
+def set_board_recognition(_, recognition):
+    board_tasker.recognition = recognition
+    return True
+
+
+def inspect_saved_tile(_, entry, terminal, **kwargs):
+    recognition = board_tasker.recognition
+    if entry == "BoardRead.Scan":
+        recognition.hud = (14, 11, 6)
+        recognition.markers = {tile: (facing,) for tile, (_, facing) in layout.items()}
+        return terminal
+    tile = recognition.tile
+    inspected.append(tile)
+    if tile == (9, 4) and inspected.count(tile) == 1:
+        return "BoardRead.Empty"
+    recognition.identity = {"name": layout[tile][0]}
+    return terminal
+
+
+board_tasker.resource.register_custom_recognition = set_board_recognition
+board_tasker.resource.unregister_custom_recognition = lambda _: True
+root = Path(__file__).resolve().parent.parent
+board = read_board(root / "calib/board.m02.bossLeft.json")
+reader = Reader(CATALOG, read_json(root / "calib/slots.json"))
+with patch("harness.screen.board_read.require_terminal", side_effect=inspect_saved_tile):
+    scanned = read_board_tiles(board_tasker, reader, board, known_layout=layout)
+assert inspected == [(9, 3), (9, 4), (9, 4)]
+assert [(p["name"], p["facing"]) for p in scanned["pieces"]] == list(layout.values())
 
 # A tactical draft with its round HUD covered is a valid post-battle destination.
 tactic_screen = {"screen": "tacticSelection", "round": None, "canReady": False}

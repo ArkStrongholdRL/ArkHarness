@@ -224,33 +224,46 @@ def read_board_tiles(tasker: Tasker, reader: Reader, board: dict, *,
     resource = tasker.resource
     if not resource.register_custom_recognition("ArkBoardRead", recognition):
         raise RuntimeError("Could not register board inspection")
-    pieces = []
+    pieces = {}
+
+    def inspect(tile):
+        recognition.tile, recognition.identity = tile, None
+        if require_terminal(tasker, "BoardRead.Inspect", "BoardRead.Closed",
+                            allow_empty=recognition.allow_missing) == "BoardRead.Empty":
+            return
+        row, col = tile
+        if known_layout is not None and recognition.identity["name"] != known_layout[tile][0]:
+            raise RuntimeError(f"The operator at ({row}, {col}) did not match the saved board")
+        directions = recognition.markers[tile]
+        pieces[tile] = {"row": row, "col": col, "facing": directions[0] if len(directions) == 1 else None,
+                        **recognition.identity}
+
     try:
         try:
             require_terminal(tasker, "BoardRead.Scan", "BoardRead.Anchor")
         except RuntimeError as error:
             raise RuntimeError(f"{error}: {recognition.scan_reason}") from error
-        for (row, col), directions in recognition.markers.items():
-            if not directions or (inspect_tiles is not None and (row, col) not in inspect_tiles):
-                continue
-            recognition.tile = (row, col)
-            recognition.identity = None
-            if require_terminal(tasker, "BoardRead.Inspect", "BoardRead.Closed",
-                                allow_empty=recognition.allow_missing) == "BoardRead.Empty":
-                continue
-            if known_layout is not None and recognition.identity["name"] != known_layout[(row, col)][0]:
-                raise RuntimeError(f"The operator at ({row}, {col}) did not match the saved board")
-            pieces.append({"row": row, "col": col,
-                           "facing": directions[0] if len(directions) == 1 else None,
-                           **recognition.identity})
+        candidates = [tile for tile, directions in recognition.markers.items()
+                      if directions and (inspect_tiles is None or tile in inspect_tiles)]
+        for tile in candidates:
+            inspect(tile)
+        if recognition.allow_missing:
+            expected = deploy_cap - recognition.hud[2]
+            missing = [tile for tile in candidates if tile not in pieces]
+            if len(pieces) < expected:
+                for tile in missing:
+                    inspect(tile)
+            if len(pieces) != expected:
+                unread = [tile for tile in missing if tile not in pieces]
+                raise RuntimeError(f"Read {len(pieces)} saved board occupants but HUD reports {expected}; "
+                                   f"unread saved tiles: {unread}")
     finally:
         resource.unregister_custom_recognition("ArkBoardRead")
-    if recognition.allow_missing and len(pieces) != deploy_cap - recognition.hud[2]:
-        raise RuntimeError(f"Read {len(pieces)} saved board occupants but HUD reports {deploy_cap - recognition.hud[2]}")
-    scanned_markers = ({(p["row"], p["col"]): (p["facing"],) for p in pieces}
+    ordered = [pieces[tile] for tile in candidates if tile in pieces]
+    scanned_markers = ({(p["row"], p["col"]): (p["facing"],) for p in ordered}
                        if recognition.allow_missing else recognition.markers)
     return {"stageId": stage, "round": recognition.hud[0], "funds": recognition.hud[1],
-            "remaining": recognition.hud[2], "pieces": pieces,
+            "remaining": recognition.hud[2], "pieces": ordered,
             "facingSource": "track" if known_layout is not None else "markers",
             "markedTiles": [tile for tile, directions in scanned_markers.items() if directions],
             "facings": [{"row": row, "col": col, "facing": directions[0] if len(directions) == 1 else None}
