@@ -12,6 +12,7 @@ from maa.tasker import Tasker
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .native import Frame
 from .read import CATALOG, ROOT, clean, integer, read_json
+from .session import task_recognition
 
 
 FACING_OFFSETS = {"UP": (0, -182), "RIGHT": (182, 0), "DOWN": (0, 182), "LEFT": (-182, 0)}
@@ -221,10 +222,7 @@ def place_operator(tasker: Tasker, board: dict, stages: dict, source: tuple[int,
     recognition = DeployRecognition(stage, source, name, (x, y), normal_target, facing,
                                     from_board=from_board, expected_round=expected_round,
                                     stage_confirmed=stage_confirmed, summon=summon)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkDeploy", recognition):
-        raise RuntimeError("Could not register the deployment recognizer")
-    try:
+    with task_recognition(tasker, "ArkDeploy", recognition):
         job = tasker.post_task("Board.Deploy", {
             "Board.PickHand": {"target": [source_x, source_y]},
             "Board.LiftHand": {"target": [source_x, source_y - 80]},
@@ -235,8 +233,6 @@ def place_operator(tasker: Tasker, board: dict, stages: dict, source: tuple[int,
         }).wait()
         detail = job.get()
         nodes = detail.nodes if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkDeploy")
     names = [node.name for node in nodes]
     swipes = completed_facing_swipes(nodes)
     if (job.succeeded and names and names[-1] in PLACEMENT_TERMINALS

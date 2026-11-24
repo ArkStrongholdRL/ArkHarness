@@ -16,6 +16,7 @@ from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load
 from .commander import select as select_commander
 from .native import Frame
 from .read import CATALOG, ROOT, Reader, clean, integer, read_json, read_screen
+from .session import task_recognition
 from .state import (
     BATTLE_ACTIONS, BRIEFING_ACTIONS, DRAFT_SCREENS, INSPECTIONS, LIVE_SCREENS, LiveScreen, require_action, require_return,
     screen_snapshot,
@@ -36,11 +37,11 @@ ENTRIES = {
     "leave-match": ("Interrupt.Leave", "Interrupt.SavedEntrance"),
     "interrupt-match": ("Interrupt.End", "Interrupt.NewEntrance"),
     "select-bounty": ("Bounty.Select", "ArkReturnedRest"),
-    "select-equipment": ("Bounty.Select", "ArkReturnedRest"),
-    "select-tactic": ("Bounty.Select", "ArkReturnedRest"),
+    "select-equipment": ("Supply.Select", "ArkReturnedRest"),
+    "select-tactic": ("Tactic.Select", "ArkReturnedRest"),
     "recover-match": ("Recovery.Route", "Recovery.Returned"),
 }
-DRAFT_ACTIONS = {"select-bounty": "Bounty.Screen", "select-equipment": "Supply.Screen", "select-tactic": "Tactic.Screen"}
+DRAFT_ACTIONS = {"select-bounty", "select-equipment", "select-tactic"}
 ERRORS = {
     "Entry.SavedMatch": "A saved match is displayed at the entrance; no opening input was sent",
     "ArkUnexpectedScreen": "Expected the preparation anchor or a supported panel for close-panel",
@@ -61,7 +62,6 @@ class NavigationRecognition(CustomRecognition):
         self.reader = reader
         self.expected_round = expected_round
         self.bounty = bounty
-        self.bounty_target_verified = False
         self.started_round = None
         self.snapshot = None
         self.stage_id = None
@@ -137,7 +137,6 @@ class NavigationRecognition(CustomRecognition):
                 if len(labels) != 1:
                     return None
                 box = tuple(labels[0].box)
-            self.bounty_target_verified = True
             return box
         if kind == "matchInfo":
             return self.point(kind) if frame.hit("Screen.MatchInfoButton") else None
@@ -198,9 +197,6 @@ class NavigationRecognition(CustomRecognition):
 
 def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_ms: int, *,
                    checkpoint: str | None = None, scroll_preview: bool = False) -> None:
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkNavigation", recognition):
-        raise RuntimeError("Could not register the navigation recognizer")
     entry, terminal = ENTRIES[recognition.action]
     override = {
         "ArkReadyOnce": {"timeout": timeout_ms},
@@ -209,9 +205,6 @@ def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_m
     }
     if recognition.action == "ready-battle":
         override["ArkBattleStarted"] = {"enabled": True}
-    if screen_node := DRAFT_ACTIONS.get(recognition.action):
-        override["Bounty.ClickSlot"] = {"all_of": [screen_node, "Bounty.ExpectedOffer"]}
-        override["Bounty.ConfirmSlot"] = {"all_of": [screen_node, "Bounty.ExpectedConfirmation"]}
     if scroll_preview:
         override["ArkOpenEnemyPreview"] = {"next": ["ArkScrollEnemyPreview"]}
         override["ArkCloseEnemyPreview"] = {"custom_recognition_param": "enemyPreviewScrolled"}
@@ -223,12 +216,11 @@ def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_m
         if checkpoint == "briefing":
             override["Entry.BriefingCheckpoint"] = {"enabled": True}
             override["Entry.ClickBriefingReady"] = {"enabled": False}
-    try:
+    with task_recognition(tasker, "ArkNavigation", recognition):
         job = tasker.post_task(entry, override).wait()
         detail = job.get()
-        nodes = [node.name for node in detail.nodes] if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkNavigation")
+        steps = detail.nodes if detail else []
+    nodes = [node.name for node in steps]
     last = nodes[-1] if nodes else ""
     recognition.steps = nodes
     failed_at = next((name for name in nodes if name in ERRORS), None)
@@ -249,7 +241,7 @@ def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_m
     }
     if not job.succeeded or (last != terminal and not opening_stop and not battle_stop) or recognition.snapshot is None:
         if recognition.action in DRAFT_ACTIONS:
-            if recognition.bounty_target_verified:
+            if any(node.name.endswith((".ClickSlot", ".ConfirmSlot")) and node.action is not None for node in steps):
                 raise RuntimeError("Card selection did not return to the preparation anchor")
             raise RuntimeError("The card slot and ID did not match again; no input was sent")
         raise RuntimeError(f"Navigation stopped at {last or entry}")

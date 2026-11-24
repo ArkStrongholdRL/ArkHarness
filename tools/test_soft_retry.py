@@ -20,9 +20,34 @@ from harness.screen.board_read import read_board_tiles
 from harness.screen.equip import equipment_funds_match
 from harness.screen.holdings import reconcile_holdings
 from harness.screen.read import CATALOG, Reader, expanded_shop_level, read_json, shop_reward_choices
+from harness.screen.session import SessionRecognizers, task_recognition
 from harness.screen.state import require_action, require_return
 from harness.screen.withdraw import WithdrawRecognition
 from harness.track import Track
+
+# A callback is isolated to its task, even if the task caller raises.
+registered_recognizers = {}
+
+
+def register_once(name, callback):
+    assert name not in registered_recognizers
+    registered_recognizers[name] = callback
+    return True
+
+
+resource = types.SimpleNamespace(register_custom_recognition=register_once)
+session_tasker = types.SimpleNamespace(screen_recognizers=SessionRecognizers(resource))
+navigation = registered_recognizers["ArkNavigation"]
+for expected in (1, 2):
+    active = types.SimpleNamespace(analyze=lambda *_: expected)
+    try:
+        with task_recognition(session_tasker, "ArkNavigation", active):
+            assert navigation.analyze(None, None) == expected
+            assert registered_recognizers["ArkDeploy"].analyze(None, None) is None
+            raise ValueError("task failed")
+    except ValueError:
+        pass
+    assert navigation.analyze(None, None) is None
 
 # The briefing shows the group opposite the highlighted one as disabled.
 # Compare both possible selections before a plan or commander exists.

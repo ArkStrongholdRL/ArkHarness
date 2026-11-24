@@ -18,6 +18,7 @@ from PIL import Image
 from .bounty import SLOTS as BOUNTY_SLOTS, BountyCatalog
 from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
 from .native import Frame, OfflineController
+from .session import task_recognition
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -511,14 +512,9 @@ class ScreenRecognition(CustomRecognition):
 
 
 def read_screen(tasker: Tasker, reader: Reader) -> dict:
-    resource = tasker.resource
     recognition = ScreenRecognition(reader)
-    if not resource.register_custom_recognition("ArkReadScreen", recognition):
-        raise RuntimeError("Could not register the ScreenState recognizer")
-    try:
+    with task_recognition(tasker, "ArkReadScreen", recognition):
         job = tasker.post_task("ReadScreen").wait()
-    finally:
-        resource.unregister_custom_recognition("ArkReadScreen")
     if not job.succeeded or recognition.state is None:
         raise RuntimeError(recognition.error or "MaaFramework ReadScreen did not return a ScreenState")
     return recognition.state

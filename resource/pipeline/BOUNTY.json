@@ -51,6 +51,32 @@
     "next": ["ArkReturnedRest"],
     "timeout": 15000
   },
+  "Supply.Select": {
+    "next": ["Supply.ConfirmSlot", "Supply.ClickSlot"], "timeout": 4000
+  },
+  "Supply.ClickSlot": {
+    "recognition": "And", "all_of": ["Supply.Screen", "Bounty.ExpectedOffer"], "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "next": ["ArkReturnedRest", "Supply.ConfirmSlot"], "timeout": 15000
+  },
+  "Supply.ConfirmSlot": {
+    "recognition": "And", "all_of": ["Supply.Screen", "Bounty.ExpectedConfirmation"], "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "next": ["ArkReturnedRest"], "timeout": 15000
+  },
+  "Tactic.Select": {
+    "next": ["Tactic.ConfirmSlot", "Tactic.ClickSlot"], "timeout": 4000
+  },
+  "Tactic.ClickSlot": {
+    "recognition": "And", "all_of": ["Tactic.Screen", "Bounty.ExpectedOffer"], "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "next": ["ArkReturnedRest", "Tactic.ConfirmSlot"], "timeout": 15000
+  },
+  "Tactic.ConfirmSlot": {
+    "recognition": "And", "all_of": ["Tactic.Screen", "Bounty.ExpectedConfirmation"], "box_index": 1,
+    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
+    "next": ["ArkReturnedRest"], "timeout": 15000
+  },
   "Bounty.ExpectedOffer": {
     "recognition": "Custom",
     "custom_recognition": "ArkNavigation",

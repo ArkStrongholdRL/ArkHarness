@@ -14,6 +14,8 @@ from maa.tasker import Tasker
 from numpy import ndarray
 from PIL import Image
 
+from .session import SessionRecognizers
+
 
 ADB_PATH = Path(os.environ.get("ARK_ADB", "D:/ADB/platform-tools/adb.exe"))
 ADB_ADDRESS = "127.0.0.1:16384"
@@ -66,6 +68,7 @@ def load_ocr(controller: Controller, resource_path: Path) -> Tasker:
     tasker = Tasker()
     if not tasker.bind(resource, controller):
         raise RuntimeError("Could not bind MaaFramework resources and controller")
+    tasker.screen_recognizers = SessionRecognizers(resource)
     return tasker
 
 
