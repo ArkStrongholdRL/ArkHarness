@@ -202,6 +202,25 @@ class Rules:
         idx = next((i for i, g in enumerate(bc.get("groups") or []) if main in g), -1)
         return 0 if idx < 0 else idx
 
+    def opening_bond_choice(self, s: dict, highlighted: int | None) -> dict:
+        """Evaluate each group as if selected, using the opening plan's ordered priorities."""
+        match = s["match"]
+        groups = match["bondChoice"]["groups"]
+        ungrouped_disabled = set(match.get("disabledBonds") or []) - set(groups[0]) - set(groups[1])
+        disabled = [sorted(ungrouped_disabled | set(groups[1 - i])) for i in range(2)]
+        for bond in self.plan.order:
+            for i, group in enumerate(groups):
+                if bond in group and not self.bond_unavailable(bond, disabled[i]):
+                    return {"group": i, "bond": bond, "disabledBonds": disabled[i]}
+
+        def commander_weights(i):
+            weights = self.band_weights({**s, "match": {**match, "disabledBonds": disabled[i]}})
+            return (bool(weights["forced"]), max((weight for _, weight in weights["pairs"]), default=0),
+                    i == highlighted)
+
+        i = max(range(2), key=commander_weights)
+        return {"group": i, "bond": None, "disabledBonds": disabled[i]}
+
     # ------------------------------------------------------------------ 2. opening band (botPickBand / botBandWeights)
     def band_strength(self, band: str) -> float:
         if self.gd.difficulty != "ABYSS":

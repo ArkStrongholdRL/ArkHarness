@@ -422,10 +422,10 @@ class Live:
                "bossRound": self.gd.boss_round, "hiddenRound": self.gd.hidden_round}
         s = {"config": cfg, "match": {"round": 0, "disabledBonds": b.get("disabledBonds") or [], "bossId": b.get("bossId"),
                                      "bondChoice": {"groups": groups, "picked": None}}, "self": {"hand": [], "temp": [], "board": [], "bonds": []}}
-        group = self.rules.bond_group(s)
+        opening = self.rules.opening_bond_choice(s, b.get("previewSelected"))
+        group = opening["group"]
         s["match"]["bondChoice"]["picked"] = group
-        outside_groups = set(s["match"]["disabledBonds"]) - set(groups[0]) - set(groups[1])
-        s["match"]["disabledBonds"] = sorted(outside_groups | set(groups[1 - group]))
+        s["match"]["disabledBonds"] = opening["disabledBonds"]
         bw = self.rules.band_weights(s)
         band = bw.get("forced") or self.rules.band_pick(bw, self.rng)
         weights = dict(bw["pairs"])
@@ -440,7 +440,7 @@ class Live:
             name = next(iter(passive), None)
         if not name:
             raise Stop("No catalog commander is available")
-        r = self.flow("enter-layout", bond_group=group, commander=name,
+        r = self.flow("enter-layout", bond_group=group, expected_groups=groups, commander=name,
                       commander_fallbacks=tuple(passive) if self.mode == "auto" else ())
         selected = r["commander"]["commander"]
         if selected != name or not band:
@@ -452,7 +452,8 @@ class Live:
         self.reader.deploy_cap_floor = 0
         self.reader.reward_kind_hint = None
         self.track = Track(self.gd, legacy_equip_snapshot=False)
-        self.log({"screen": "briefing", "decision": "match start", "action": {"group": group, "band": band, "weights": bw},
+        self.log({"screen": "briefing", "decision": "match start",
+                  "action": {"group": group, "priorityBond": opening["bond"], "band": band, "weights": bw},
                   "result": r})
         self.save()
 

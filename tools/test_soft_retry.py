@@ -24,6 +24,23 @@ from harness.screen.state import require_action, require_return
 from harness.screen.withdraw import WithdrawRecognition
 from harness.track import Track
 
+# The briefing shows the group opposite the highlighted one as disabled.
+# Compare both possible selections before a plan or commander exists.
+opening_rules = Rules(load().for_mode("mode_single_13"))
+priority = ["ursusShip", "lethaniaShip", "victoriaShip", "egirShip", "siracusaShip"]
+other = ["yanShip", "kjeragShip", "iberiaShip", "kazimierzShip", "sargonShip"]
+for groups, expected in (([other, priority], 1), ([priority, other], 0)):
+    opening_screen = {"config": {"modeId": "mode_single_13"}, "self": {},
+                      "match": {"round": 0, "bondChoice": {"groups": groups, "picked": None},
+                                "disabledBonds": groups[1]}}
+    opening = opening_rules.opening_bond_choice(opening_screen, highlighted=0)
+    assert opening == {"group": expected, "bond": "ursusShip", "disabledBonds": sorted(groups[1 - expected])}
+
+# If the first priority is unavailable, the next priority can choose the other group.
+opening_screen["match"]["bondChoice"]["groups"] = [priority[1:] + other[:1], [priority[0]] + other[1:]]
+with patch.object(opening_rules, "bond_unavailable", side_effect=lambda bond, _: bond == "ursusShip"):
+    assert opening_rules.opening_bond_choice(opening_screen, highlighted=1)["bond"] == "lethaniaShip"
+
 def make(prep_behaviour):
     live = object.__new__(Live)
     live.a = types.SimpleNamespace(resume=False, once=False)

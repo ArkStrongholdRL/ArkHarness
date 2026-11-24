@@ -275,7 +275,8 @@ def observe_screen(tasker: Tasker) -> LiveScreen:
 
 def enter_layout(tasker: Tasker, slots: dict, catalog: Path, before: dict, timeout_ms: int, *,
                  commander: str | None, resource_path: Path, stop_at: str | None,
-                 bond_group: int | None, commander_fallbacks: tuple[str, ...] = ()) -> dict:
+                 bond_group: int | None, commander_fallbacks: tuple[str, ...] = (),
+                 expected_groups: list[list[str]] | None = None) -> dict:
     screen = before["screen"]
     if stop_at is not None and stop_at not in ENTRY_CHECKPOINTS:
         raise ValueError("Opening checkpoint must be briefing or squadSelection")
@@ -303,7 +304,7 @@ def enter_layout(tasker: Tasker, slots: dict, catalog: Path, before: dict, timeo
     if bond_group is not None:
         if screen != "briefing":
             raise RuntimeError(f"Opening did not reach briefing; stopped on {screen}")
-        choice = choose_bond_group(tasker, Reader(catalog, slots), bond_group)
+        choice = choose_bond_group(tasker, Reader(catalog, slots), bond_group, expected_groups=expected_groups)
         result["bondChoice"] = choice["bondChoice"]
         result["steps"].extend(choice["steps"])
         screen = choice["after"]
@@ -330,7 +331,7 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
             slot: int | None = None, bond_group: int | None = None, stop_at: str | None = None,
             battle_round: int | None = None, confirm_interrupt: bool = False,
             expected_round: int | None = None, scroll_preview: bool = False, expected_id: str | None = None,
-            commander_fallbacks: tuple[str, ...] = ()) -> dict:
+            commander_fallbacks: tuple[str, ...] = (), expected_groups: list[list[str]] | None = None) -> dict:
     buttons = slots["buttons"]
     probe = NavigationRecognition(buttons, "observe", None, None)
     run_navigation(tasker, probe, timeout_ms)
@@ -384,7 +385,7 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
     if action == "enter-layout":
         return enter_layout(tasker, slots, catalog, before, timeout_ms, commander=commander,
                             resource_path=resource_path, stop_at=stop_at, bond_group=bond_group,
-                            commander_fallbacks=commander_fallbacks)
+                            commander_fallbacks=commander_fallbacks, expected_groups=expected_groups)
     if action == "wait-battle":
         if type(battle_round) is not int or battle_round < 1:
             raise ValueError("wait-battle requires a positive battle round")
