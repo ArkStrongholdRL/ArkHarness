@@ -13,6 +13,7 @@ from maa.tasker import Tasker
 
 from ..wave import match_preview
 from .bounty import SLOTS as BOUNTY_SLOTS
+from .boss_timing import BossTiming
 from .briefing import choose_bond_group, inspect_briefing
 from .capture import OCR_RESOURCE, add_session_args, session
 from .commander import select as select_commander
@@ -88,6 +89,7 @@ class NavigationRecognition(CustomRecognition):
         self.inspection = None
         self.inspection_error = None
         self.steps = []
+        self.boss_timing = None
 
     def point(self, name: str) -> tuple[int, int, int, int]:
         x, y = self.buttons[name]["center"]
@@ -142,6 +144,10 @@ class NavigationRecognition(CustomRecognition):
         frame = Frame(context, argv.image)
         kind = json.loads(argv.custom_recognition_param)
         hit = (0, 0, 1, 1)
+        if kind == "bossTiming":
+            if self.boss_timing is not None:
+                self.boss_timing.sample(frame)
+            return None
         if kind == "savedRound":
             current = integer(frame.text("Entry.ResumeSoloText"), r"当前回合([0-9]+)")
             return hit if current is not None and self.expected_round in (None, current) else None
@@ -196,6 +202,8 @@ class NavigationRecognition(CustomRecognition):
                     snapshot = {"screen": "battle", "round": self.started_round, "canReady": False}
                     if current is None:
                         snapshot["leaderBattle"] = True
+                        if self.boss_timing is not None:
+                            self.boss_timing.start(frame)
                     return self.AnalyzeResult(hit, {"snapshot": snapshot})
                 return None
             if current is None or self.expected_round is not None and current != self.expected_round:
@@ -248,6 +256,8 @@ def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_m
         "ArkConfirmReady": {"timeout": timeout_ms},
         "ArkWaitBattle": {"timeout": timeout_ms},
     }
+    if recognition.boss_timing is not None:
+        override["ArkBossTiming"] = {"enabled": True}
     ready_action = ReadyAction(recognition) if recognition.action in {"start-battle", "ready-battle"} else None
     with task_recognition(tasker, "ArkNavigation", recognition, ready_action=ready_action):
         job = run_task(tasker, entry, override)
@@ -381,7 +391,8 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
             slot: int | None = None, bond_group: int | None = None, stop_at: str | None = None,
             battle_round: int | None = None, confirm_interrupt: bool = False,
             expected_round: int | None = None, scroll_preview: bool = False, expected_id: str | None = None,
-            commander_fallbacks: tuple[str, ...] = (), expected_groups: list[list[str]] | None = None) -> dict:
+            commander_fallbacks: tuple[str, ...] = (), expected_groups: list[list[str]] | None = None,
+            boss_timing: BossTiming | None = None) -> dict:
     buttons = slots["buttons"]
     probe = NavigationRecognition(buttons, "observe", None, None)
     run_navigation(tasker, probe, timeout_ms)
@@ -441,6 +452,8 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
             raise ValueError("wait-battle requires a positive battle round")
         if before["screen"] in DRAFT_SCREENS | {"preparation", "matchInterrupted", "disconnect"}:
             require_return(action, {"round": battle_round}, before)
+            if boss_timing is not None:
+                boss_timing.finish(before)
             return {"startedRound": battle_round, "after": before}
         transition = before["screen"] in {"roundHud", "unknown"} and before["round"] in (
             None, battle_round, battle_round + 1)
@@ -448,8 +461,11 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
             raise RuntimeError("The current battle round does not match the requested round")
         recognition = NavigationRecognition(buttons, action, None, None)
         recognition.started_round = battle_round
+        recognition.boss_timing = boss_timing
         run_navigation(tasker, recognition, timeout_ms)
         require_return(action, {"round": battle_round}, recognition.snapshot)
+        if boss_timing is not None:
+            boss_timing.finish(recognition.snapshot)
         return {"startedRound": battle_round, "after": recognition.snapshot}
 
     if action in DRAFT_ACTIONS:
@@ -483,6 +499,7 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
 
     reader = Reader(catalog, slots) if action in INSPECTIONS else None
     recognition = NavigationRecognition(buttons, action, bond, reader, before["round"])
+    recognition.boss_timing = boss_timing
     run_navigation(tasker, recognition, timeout_ms, scroll_preview=action == "inspect-enemies" and scroll_preview)
     after = recognition.snapshot
     if action == "open-entrance":

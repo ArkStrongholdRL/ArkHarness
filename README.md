@@ -1,11 +1,12 @@
-# ArkHarness
+![ArkHarness 封面：卫戍协议强化学习](public/hero.png)
 
 ![Windows](https://img.shields.io/badge/platform-Windows-0078D4)
 ![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![MaaFramework](https://img.shields.io/badge/powered%20by-MaaFramework-5865F2)
 
-明日方舟「卫戍协议」规程 10–20 自动化。Windows + MuMu + MaaFramework。
+明日方舟「卫戍协议」规程Harness。Windows + MuMu + MaaFramework。
 
+还不算非常完整，目前只按照自己的需求完善了模板，接入其他模型可以修改调用点`live.py`
 ## 首次准备
 
 需要 MuMu、ADB、Node.js、uv。PowerShell 中将以下路径换成本机路径。
@@ -48,12 +49,6 @@ $run = '.\.venv\Scripts\python.exe'
 ```
 
 布阵后停下用 `--mode confirm --stop-after-layout`。日志在 `logs/live/`。
-
-将 `layout_gen_v4.pt`、`layout_scorer_v5.pt` 和对应的两个推理脚本放在 `models/`。领袖回合会对 64 个站位候选打分，执行得分最高且通过实机落点预检的候选。模型文件缺失、领袖模板未收录或候选未通过预检时，沿用现有布阵并把原因写入日志。
-
-商店读屏会把名称精确匹配、卡面完整点亮的样本保存到本地 `resource/image/portrait/`。同一张牌保留第一份样本。下次启动时，普通买牌优先用 MFW 匹配已收录的卡面，未命中再读取牌名。
-
-持续采集时，先结束正在控制模拟器的其他进程，再从存档启动采集器。结算后会自动开下一局，直到 202 张普通商店牌的模板全部通过 MFW 匹配核验。进度和缺项见 `debug/shop-portrait-audit.json`。
 
 ```powershell
 & $run -X utf8 -m tools.collect_shop_portraits --resume --mode auto --adb-address 127.0.0.1:16384

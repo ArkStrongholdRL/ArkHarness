@@ -1,5 +1,6 @@
 samples/
 *.png
+!/public/hero.png
 !resource/image/withdraw-icon.png
 !resource/image/stage-m[0-9][0-9]-*.png
 !resource/image/bond-members-icon.png

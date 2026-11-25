@@ -32,6 +32,7 @@ class GameState:
     boss_id: str | None = None
     hidden_boss_id: str | None = None
     leader_template: str | None = None
+    boss_timing: dict | None = None
     pending_equipment_reward: dict | None = None
     tactic_free_refreshes: int = 0
     tactic_upgrades: dict[str, int] = field(default_factory=dict)

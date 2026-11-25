@@ -1312,10 +1312,53 @@ class Live:
         self.save()
         self.log({"screen": "prep", "round": rnd, "decision": "equipment reward already closed", "result": receipt})
 
-    def ready_battle(self):
+    def boss_clock(self, rnd):
+        from .screen.boss_timing import BossTiming
+
+        if rnd not in (self.gd.boss_round, self.gd.hidden_round):
+            return None
+        data = self.state.boss_timing
+        if data is None or data["round"] != rnd:
+            data = {"round": rnd, "modeId": self.state.mode_id,
+                    "template": self.state.leader_template,
+                    "bossId": self.state.hidden_boss_id if rnd == self.gd.hidden_round else self.state.boss_id}
+            self.state.boss_timing = data
+
+        def report(phase):
+            result = {"phase": phase, **data}
+            if phase == "end":
+                started, ended = data.get("startedAt"), data["endedAt"]
+                zero_at = data.get("zeroAt")
+                result["reachedZero"] = True if zero_at is not None else None
+                if zero_at is not None:
+                    result["secondsAfterZero"] = round(ended - zero_at, 3)
+                if started is not None:
+                    result["wallSeconds"] = round(ended - started, 3)
+                start_timer, end_timer = data.get("startTimer"), data.get("endTimer")
+                if end_timer is None and ended - data.get("lastTimerAt", 0) <= 1.5:
+                    end_timer = data["lastTimer"]
+                    result["endTimerFromPreviousFrame"] = end_timer
+                if end_timer is not None and end_timer > 0 and zero_at is None:
+                    result["reachedZero"] = False
+                    if start_timer is not None:
+                        result["countdownSeconds"] = start_timer - end_timer
+                        result["killRemaining"] = end_timer if data.get("outcome") == "cleared" else None
+                if data.get("endLife") is None and ended - data.get("lastLifeAt", 0) <= 1.5:
+                    result["endLifeFromPreviousFrame"] = data["lastLife"]
+            self.log({"screen": "battle", "round": rnd, "decision": "boss timing", "result": result})
+            self.save()
+
+        return BossTiming(data, report)
+
+    def ready_battle(self, replay_state):
         with device_action(self.state, self.save, "ready"):
-            receipt = self.flow("ready-battle")
+            rnd = self.state.round
+            timing = self.boss_clock(rnd)
+            receipt = self.flow("ready-battle", **({"boss_timing": timing} if timing is not None else {}))
             self.state.prep_round = None
+        if timing is not None:
+            state = self.screen_state(replay_state, include_overflow=True)
+            self.log({"screen": "battle", "round": rnd, "decision": "boss replay input", "state": state})
         return receipt
 
     def plan_end(self, st, receipts):
@@ -1463,7 +1506,10 @@ class Live:
             if self.state.dirty_areas:
                 self.log({**row, "result": receipts})
                 return
-        receipts["ready"] = self.ready_battle()
+        for action in receipts.get("tail", []):
+            if after := action["receipt"].get("after"):
+                st2["self"]["funds"] = after["funds"]
+        receipts["ready"] = self.ready_battle(st2)
         self.log({**row, "result": receipts})
 
     def place_summons(self, board, planned, rnd, receipts):
@@ -1606,7 +1652,9 @@ class Live:
                         if observed_round is not None:
                             self.state.round = observed_round
                         in_wait = True
-                        self.flow("wait-battle", battle_round=self.state.round)
+                        timing = self.boss_clock(self.state.round)
+                        self.flow("wait-battle", battle_round=self.state.round,
+                                  **({"boss_timing": timing} if timing is not None else {}))
                         in_wait = False
                     else:
                         self.wait_change(screen)
@@ -1618,6 +1666,8 @@ class Live:
                 elif screen == "matchEnded":
                     if not self._match_start_owed:  # a retry after a failed start must not count the game twice
                         outcome = self.flow("observe").get("result")
+                        if self.state.boss_timing and self.state.boss_timing["round"] == self.state.round:
+                            self.boss_clock(self.state.round).finish({"screen": "matchInterrupted", "result": outcome})
                         self.screenshot("match-end")
                         self.log({"screen": screen, "round": self.state.round, "decision": "match end", "result": outcome})
                         done += 1
