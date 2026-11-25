@@ -9,9 +9,9 @@ from maa.context import Context
 from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
+from .capture import add_session_args, session
 from .native import Frame, completed_data
-from .session import task_recognition
+from .session import run as run_task, task_recognition
 from .read import CATALOG, clean, index_names, integer, read_json
 
 
@@ -100,9 +100,8 @@ def inspect_command(tasker: Tasker, catalog: Path) -> dict:
     """Read the held command and verify return to the same preparation round."""
     recognition = CommandRecognition(catalog)
     with task_recognition(tasker, "ArkCommand", recognition):
-        job = tasker.post_task("Command.Inspect").wait()
-    detail = job.get()
-    result = completed_data(detail.nodes, "Command.Closed") if detail else None
+        job = run_task(tasker, "Command.Inspect")
+    result = completed_data(job.nodes, "Command.Closed")
     if not job.succeeded or result is None:
         raise RuntimeError("The command details or return to preparation could not be verified")
     return result
@@ -110,16 +109,10 @@ def inspect_command(tasker: Tasker, catalog: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
+    add_session_args(parser, catalog=CATALOG)
     args = parser.parse_args()
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        tasker = load_ocr(connect(args.adb, args.address), args.ocr_resource)
+        tasker = session(args.adb, args.address, args.ocr_resource).tasker
         print(json.dumps(inspect_command(tasker, args.catalog), ensure_ascii=False))
     except (OSError, RuntimeError, ValueError) as error:
         parser.exit(1, f"{error}\n")

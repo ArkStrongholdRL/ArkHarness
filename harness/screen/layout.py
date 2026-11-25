@@ -5,11 +5,11 @@ from time import perf_counter
 
 from maa.tasker import Tasker
 
-from ..layout import LayoutStep, as_tile, plan_layout
+from ..layout import LayoutStep, as_tile, calibrated_layout_tiles, plan_layout
 from ..track import Track
 from .deploy import deploy, move_board
 from .read import Reader
-from .withdraw import withdraw_board
+from .withdraw import WithdrawNotSent, withdraw_board
 
 
 class LayoutUnverified(RuntimeError):
@@ -43,9 +43,7 @@ def execute_layout(tasker: Tasker, reader: Reader, calibration: dict, track: Tra
         raise ValueError("The normal round requires normal field calibration")
     if not all(calibration["views"].get(view) for view in ("normal", "drag")):
         raise ValueError("Layout requires both preparation and drag calibration")
-    calibrated = set.intersection(*({tuple(cell[:2]) for cell in calibration["views"][view]["groundCenters"]}
-                                    for view in ("normal", "drag")))
-    steps = plan_layout(track, state, result, calibrated)
+    steps = plan_layout(track, state, result, calibrated_layout_tiles(calibration))
     names = {}
     for step in steps:
         piece = track._loc_by_uid(step.uid)["piece"]
@@ -70,9 +68,14 @@ def execute_layout(tasker: Tasker, reader: Reader, calibration: dict, track: Tra
             if before_step:
                 before_step(step)
             if step.target is None:
-                receipt = withdraw_board(tasker, reader.slots, calibration, name, *step.source, step.hand_slot,
-                                         expected_round=current_round, stage_confirmed=True,
-                                         summon=loc["piece"].kind == "token")
+                try:
+                    receipt = withdraw_board(tasker, reader.slots, calibration, name, *step.source, step.hand_slot,
+                                             expected_round=current_round, stage_confirmed=True,
+                                             summon=loc["piece"].kind == "token")
+                except WithdrawNotSent:
+                    if on_step:
+                        on_step()
+                    raise
                 track.bench(step.uid)
                 operation = "bench"
             elif step.source is None:

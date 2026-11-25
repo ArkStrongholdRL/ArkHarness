@@ -8,7 +8,7 @@ from maa.tasker import Tasker
 
 from .native import Frame, completed_data
 from .read import clean, integer
-from .session import task_recognition
+from .session import run as run_task, task_recognition
 
 
 class EquipmentChoice(CustomRecognition):
@@ -54,9 +54,8 @@ def choose_equipment_dialog(tasker: Tasker, headings: tuple[str, ...], options: 
                             expected_round: int) -> dict:
     recognition = EquipmentChoice(headings, options, expected_round)
     with task_recognition(tasker, "ArkEquipChoice", recognition):
-        job = tasker.post_task("EquipChoice.Start").wait()
-    detail = job.get()
-    result = completed_data(detail.nodes, "EquipChoice.Closed") if detail else None
+        job = run_task(tasker, "EquipChoice.Start")
+    result = completed_data(job.nodes, "EquipChoice.Closed")
     if not job.succeeded or result is None:
         raise RuntimeError(f"Equipment dialog was not verified for {' / '.join(headings)}")
     return result

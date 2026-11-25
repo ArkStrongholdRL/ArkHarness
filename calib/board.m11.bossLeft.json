@@ -1,0 +1,9 @@
+{
+  "stageId": "act3autochess_m11",
+  "deployField": "bossLeft",
+  "groundGeometry": "board.m11.json",
+  "views": {
+    "normal": {"status": "shared", "geometryVerifiedOn": "act3autochess_m12"},
+    "drag": {"status": "shared", "geometryVerifiedOn": "act3autochess_m12"}
+  }
+}

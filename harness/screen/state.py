@@ -12,19 +12,19 @@ BRIEFING_ACTIONS = ("inspect-briefing", "select-bond-group")
 BATTLE_ACTIONS = {"start-battle", "ready-battle", "wait-battle"}
 DRAFT_SCREENS = {"bountySelection", "equipmentSelection", "tacticSelection"}
 INTERRUPT_SCREENS = {"preparation", "leaveConfirm", "entrance", "abandonConfirm", "matchInterrupted"}
-ENTRY_STATES = (
-    ("disconnect", "Recovery.Notice"),
-    ("title", "Lifecycle.Title"),
-    ("gameHome", "Lifecycle.GameHome"),
-    ("entrance", "Lifecycle.Entrance"),
-    ("difficultySelection", "Lifecycle.Difficulty"),
-    ("briefing", "Lifecycle.Briefing"),
-    ("strategySelection", "Lifecycle.Strategy"),
-    ("squadSelection", "Lifecycle.Squad"),
-    ("leaveConfirm", "Lifecycle.LeaveConfirm"),
-    ("abandonConfirm", "Lifecycle.AbandonConfirm"),
-    ("matchInterrupted", "Lifecycle.Interrupted"),
-)
+ENTRY_STATES = {
+    "Recovery.Notice": "disconnect",
+    "Lifecycle.Title": "title",
+    "Lifecycle.GameHome": "gameHome",
+    "Lifecycle.Entrance": "entrance",
+    "Lifecycle.Difficulty": "difficultySelection",
+    "Lifecycle.Briefing": "briefing",
+    "Lifecycle.Strategy": "strategySelection",
+    "Lifecycle.Squad": "squadSelection",
+    "Lifecycle.LeaveConfirm": "leaveConfirm",
+    "Lifecycle.AbandonConfirm": "abandonConfirm",
+    "Lifecycle.Interrupted": "matchInterrupted",
+}
 
 LiveScreen = Literal[
     "briefing", "squadSelection", "specialSelection", "preparation", "enemyPreview", "rewardSelection",
@@ -61,16 +61,16 @@ def screen_snapshot(frame: Frame) -> dict:
         screen = "directionPicker"
     anchored = screen == "preparation" and frame.hit("ArkRestText")
     if screen in {None, "preparation"}:
-        if frame.hit("Screen.MatchInfoCross") and frame.hit("ArkMatchInfoTitle"):
+        if frame.hit("Screen.MatchInfoPanel"):
             screen = "matchInfo"
             anchored = False
-        elif anchored and (frame.hit("Screen.OperatorDetails") or frame.hit("HandSale.Button") or frame.hit("Withdraw.Icon")):
+        elif anchored and frame.hit("Screen.OperatorDetailsVisible"):
             screen = "operatorDetails"
             anchored = False
     if screen == "preparation" and not anchored:
         screen = None
     if screen is None:
-        screen = next((name for name, node in ENTRY_STATES if frame.hit(node)), None)
+        screen = ENTRY_STATES.get(frame.first_hit("Screen.Lifecycle"))
     current_round = None
     if screen is None or screen in {"preparation", "enemyPreview", "bondDetail", "commandDetails", "drag", "directionPicker",
                                    *DRAFT_SCREENS, "battle", "settlement"}:
@@ -78,7 +78,7 @@ def screen_snapshot(frame: Frame) -> dict:
     snapshot = {
         "screen": screen or ("roundHud" if current_round is not None else "unknown"),
         "round": current_round,
-        "canReady": bool(anchored and frame.hit("Screen.ReadyColor") and frame.hit("ArkReadyText")),
+        "canReady": anchored and frame.hit("Screen.ReadyAvailable"),
     }
     if screen in {"battle", "settlement"} and current_round is None and frame.hit("Battle.LeaderActive"):
         snapshot["leaderBattle"] = True

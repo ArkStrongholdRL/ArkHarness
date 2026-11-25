@@ -8,18 +8,19 @@ from maa.context import Context
 from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
+from .capture import add_session_args, session
 from .native import Frame, completed_data
-from .session import task_recognition
+from .session import run as run_task, task_recognition
 from .read import ROOT, clean, integer, read_json
 
 
 class HandSaleRecognition(CustomRecognition):
-    def __init__(self, source: tuple[int, int], name: str, expected_price: int | None):
+    def __init__(self, source: tuple[int, int], name: str, expected_price: int | None, *, by_balance: bool = False):
         super().__init__()
         self.source = (*source, 1, 1)
         self.name = name
         self.expected_price = expected_price
+        self.by_balance = by_balance
 
     def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | tuple | None:
         if argv.image.shape != (720, 1280, 3):
@@ -35,8 +36,12 @@ class HandSaleRecognition(CustomRecognition):
             return None
         if kind == "check" and sale["price"] != 0:
             return None
-        if kind == "verified" and sale["price"]:
+        if kind == "verified" and (self.by_balance or sale["price"]):
             state = self.balance(frame)
+            if self.by_balance:
+                if state is not None and state["round"] == before["round"] and state["funds"] > before["funds"]:
+                    return self.result(before, state, state["funds"] - before["funds"])
+                return None
             if state == {**before, "funds": before["funds"] + sale["price"]}:
                 return self.result(before, state, sale["price"])
             return None
@@ -56,12 +61,15 @@ class HandSaleRecognition(CustomRecognition):
         if kind in {"sell", "dismiss"}:
             if state != before:
                 return None
-            quote = self.quote(frame, buttons)
+            button = self.sell_button(frame, buttons)
+            if kind == "sell" and self.by_balance:
+                return self.AnalyzeResult(button, {"price": None}) if button is not None else None
+            quote = self.quote(frame, button) if button is not None else None
             if kind == "sell":
-                if quote is None or quote[1] != self.expected_price:
+                if quote is None or self.expected_price not in (None, quote):
                     return None
-                return self.AnalyzeResult(quote[0], {"price": quote[1]})
-            return self.AnalyzeResult((0, 0, 1, 1), {"price": quote[1] if quote else None}) if details else None
+                return self.AnalyzeResult(button, {"price": quote})
+            return self.AnalyzeResult((0, 0, 1, 1), {"price": quote}) if details else None
         if details or state != before:
             return None
         if kind == "check":
@@ -83,37 +91,37 @@ class HandSaleRecognition(CustomRecognition):
     def result(self, before: dict, after: dict, price: int | None) -> CustomRecognition.AnalyzeResult:
         return self.AnalyzeResult((0, 0, 1, 1), {"price": price, "before": before, "after": after})
 
-    def quote(self, frame: Frame, buttons: list) -> tuple | None:
+    def sell_button(self, frame: Frame, buttons: list) -> tuple | None:
         if len(buttons) != 1 or not any(clean(row.text) == self.name for row in frame.rows("Board.CarriedName")):
             return None
-        button = buttons[0].box
+        return tuple(buttons[0].box)
+
+    @staticmethod
+    def quote(frame: Frame, button: tuple) -> int | None:
         x, y = button[:2]
-        price = integer(frame.text("Board.SellButtonPrice", roi=[x + 55, y - 58, 58, 34]), r"[+＋]([0-9]+)")
-        return (tuple(button), price) if price is not None else None
+        return integer(frame.text("Board.SellButtonPrice", roi=[x + 55, y - 58, 58, 34]), r"[+＋]([0-9]+)")
 
 
 def sell_hand(tasker: Tasker, slots: dict, hand_slot: int, name: str, *,
-              inspect: bool = False, expected_price: int | None = None) -> dict:
-    """Quote an operator or sell it at an explicit expected price."""
+              inspect: bool = False, expected_price: int | None = None,
+              by_balance: bool = False) -> dict:
+    """Sell a verified operator and check the transaction in the same round."""
     centers = slots["hand"]["centersByView"]["normal"]
     name = clean(name)
     if not name or type(hand_slot) is not int or not 0 <= hand_slot < len(centers):
         raise ValueError("An exact displayed name and valid zero-based hand slot are required")
-    if (not inspect or expected_price is not None) and (type(expected_price) is not int or expected_price < 0):
+    if (expected_price is not None or not (inspect or by_balance)) and (
+            type(expected_price) is not int or expected_price < 0):
         raise ValueError("A sale requires a nonnegative expected price")
-    recognition = HandSaleRecognition(tuple(centers[hand_slot]), name, expected_price)
+    required_price = None if by_balance else expected_price
+    recognition = HandSaleRecognition(tuple(centers[hand_slot]), name, required_price, by_balance=by_balance and not inspect)
     with task_recognition(tasker, "ArkHandSale", recognition):
-        if inspect:
-            override = {"HandSale.Open": {"next": ["HandSale.Dismiss"]}}
-        else:
-            terminal = "HandSale.Verified" if expected_price else "HandSale.CheckSlot"
-            override = {"HandSale.Click": {"next": [terminal]}}
-        job = tasker.post_task("HandSale.Run", override).wait()
-    detail = job.get()
-    nodes = detail.nodes if detail else []
+        override = {"HandSale.Open": {"next": ["HandSale.Dismiss"]}} if inspect else None
+        job = run_task(tasker, "HandSale.Run", override)
+    nodes = job.nodes
     result = completed_data(nodes, "HandSale.Unchanged" if inspect else "HandSale.Verified")
     if (job.succeeded and result is not None and result["price"] is not None
-            and expected_price in (None, result["price"])):
+            and required_price in (None, result["price"])):
         return {"handSlot": hand_slot, "name": name, **result}
     if any(node.name == "HandSale.Click" and node.action is not None for node in nodes):
         raise RuntimeError("Hand sale was attempted once and is unverified: The expected proceeds or empty slot did not verify")
@@ -126,15 +134,10 @@ def main() -> None:
     parser.add_argument("--name", required=True)
     parser.add_argument("--inspect", action="store_true")
     parser.add_argument("--expected-price", type=int)
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
+    add_session_args(parser)
     args = parser.parse_args()
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        tasker = load_ocr(connect(args.adb, args.address), args.ocr_resource)
+        tasker = session(args.adb, args.address, args.ocr_resource).tasker
         result = sell_hand(tasker, read_json(ROOT / "calib/slots.json"), args.hand_slot, args.name,
                            inspect=args.inspect, expected_price=args.expected_price)
         print(json.dumps(result, ensure_ascii=False))

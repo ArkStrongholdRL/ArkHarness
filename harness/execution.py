@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, TypedDict
 
-from .encode.encoder import ACT, HAND, TEMP
+from .encode.encoder import ACT, HAND, TEMP, action_name
 
 if TYPE_CHECKING:
     from .checkpoint import GameState
@@ -16,16 +16,29 @@ class PendingAction(TypedDict):
     areas: list[str]
 
 
-def mask_unverified_prep_actions(mask, own: dict, blocked_sales: list[list[int]]) -> None:
-    """Restrict the policy to preparation targets the live executor can identify."""
+def mask_unverified_prep_actions(mask, own: dict, blocked_sales: list[list[int]]) -> list[dict]:
+    """Restrict the policy to preparation targets the live executor can identify.
+
+    Returns the legal actions it removed, each with its reason, for the decision log.
+    """
+    masked: list[dict] = []
+
+    def hide(index: int, reason: str) -> None:
+        if mask[index]:
+            mask[index] = 0
+            masked.append({"action": action_name(index), "reason": reason})
+
     slots = own["shop"].get("slots") or []
     for index in range(ACT["SELL"] - ACT["BUY"]):
         offer = slots[index] if index < len(slots) else None
-        if not offer or not offer.get("id") or type(offer.get("price")) is not int:
-            mask[ACT["BUY"] + index] = 0
+        if not offer or not offer.get("id"):
+            hide(ACT["BUY"] + index, "card unread")
+        elif type(offer.get("price")) is not int:
+            hide(ACT["BUY"] + index, "price unread")
     for index, piece in enumerate(own["board"]):
         if piece and [piece["uid"], piece["row"], piece["col"]] in blocked_sales:
-            mask[ACT["SELL"] + HAND + TEMP + index] = 0
+            hide(ACT["SELL"] + HAND + TEMP + index, "blocked board sale")
+    return masked
 
 
 def recover_action(state: "GameState") -> PendingAction | None:
@@ -33,6 +46,8 @@ def recover_action(state: "GameState") -> PendingAction | None:
     action = state.pending_action
     if action is not None:
         state.dirty_areas = sorted(set(state.dirty_areas).union(action["areas"]))
+        if action["action"] == "level":
+            state.shop_level_uncertain = True
         state.pending_action = None
     return action
 

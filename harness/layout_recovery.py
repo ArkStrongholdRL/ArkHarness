@@ -2,6 +2,7 @@
 
 from copy import copy, deepcopy
 
+from .checkpoint import restore_track
 from .layout import as_tile
 from .screen.board_read import inspect_board_positions
 from .screen.equipment_read import read_equipment_slots
@@ -40,26 +41,44 @@ def matches_piece(observed, expected):
 
 
 def recover_layout_step(tasker, reader, board, track, step, screen):
+    changed = layout_outcomes(track, step)
+    piece = track._loc_by_uid(step["uid"])["piece"]
+    summon_slot = step["handSlot"] if piece.kind == "token" else None
+    return reconcile_layout(tasker, reader, board, track, changed, screen, step,
+                            summon_slot=summon_slot)
+
+
+def recover_layout_batch(tasker, reader, board, track, baseline, screen, pending=None):
+    before = copy(track)
+    before._bounty_picks = {}
+    restore_track(before, {"track": baseline["holdings"]})
+    count = screen["self"]["deployCount"]
+    if before.deployed_chess_count() != count:
+        raise RuntimeError(f"Neither the saved board nor the board before layout matches the live count ({count})")
+    possible = layout_outcomes(track, pending) if pending else None
+    return reconcile_layout(tasker, reader, board, track, before, screen, baseline,
+                            possible=possible, require_count=True)
+
+
+def reconcile_layout(tasker, reader, board, track, changed, screen, scope, *,
+                     summon_slot=None, possible=None, require_count=False):
     rnd, own = screen["match"]["round"], screen["self"]
-    if step["round"] != rnd or step["stageId"] != board["stageId"]:
+    if scope["round"] != rnd or scope["stageId"] != board["stageId"]:
         raise RuntimeError("The interrupted layout step is from a different preparation round or stage")
     funds, cap, count = (own.get(key) for key in ("funds", "deployCap", "deployCount"))
     if any(type(value) is not int for value in (funds, cap, count)):
         raise RuntimeError("Preparation HUD is incomplete for layout recovery")
-    changed = layout_outcomes(track, step)
-    summon = track._loc_by_uid(step["uid"])["piece"].kind == "token"
-
     def signature(piece):
-        return (piece.kind, piece.id) if piece else None
+        return (piece.kind, piece.uid, piece.id, piece.count) if piece else None
 
-    slots = [i for i, (before, after) in enumerate(zip(track.hand, changed.hand))
-             if signature(before) != signature(after)]
-    if summon and step["handSlot"] is not None:
-        slots = [step["handSlot"]]
-    rack_slots = [i for i, (before, after) in enumerate(zip(track.temp[:TEMP], changed.temp[:TEMP]))
-                  if signature(before) != signature(after)]
-    keys = sorted(k for k in track.board.keys() | changed.board.keys()
-                  if signature(track.board.get(k)) != signature(changed.board.get(k)))
+    alternatives = [changed] if possible is None else [changed, possible]
+    slots = sorted({i for candidate in alternatives for i, (before, after) in enumerate(zip(track.hand, candidate.hand))
+                    if signature(before) != signature(after)} | ({summon_slot} if summon_slot is not None else set()))
+    rack_slots = sorted({i for candidate in alternatives
+                         for i, (before, after) in enumerate(zip(track.temp[:TEMP], candidate.temp[:TEMP]))
+                         if signature(before) != signature(after)})
+    keys = sorted({k for candidate in alternatives for k in track.board.keys() | candidate.board.keys()
+                   if signature(track.board.get(k)) != signature(candidate.board.get(k))})
     tiles = [as_tile(key) for key in keys]
     view = set_shop_open(tasker, False)
     try:
@@ -85,7 +104,8 @@ def recover_layout_step(tasker, reader, board, track, step, screen):
         raise RuntimeError("The affected holding slots could not all be read")
 
     def matches(candidate):
-        return (all(matches_piece(observed_hand[i], candidate.hand[i]) for i in slots)
+        return ((not require_count or candidate.deployed_chess_count() == count)
+                and all(matches_piece(observed_hand[i], candidate.hand[i]) for i in slots)
                 and all(matches_piece(observed_rack[i], candidate.temp[i]) for i in rack_slots)
                 and all(matches_piece(observed_board[tile], candidate.board.get(key)) for key, tile in zip(keys, tiles)))
 

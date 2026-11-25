@@ -1,33 +1,100 @@
 {
   "Withdraw.Board": {"next": ["Withdraw.Reset", "Withdraw.Pick", "Withdraw.CloseShop"], "timeout": 3500},
   "Withdraw.Reset": {
-    "recognition": "Custom", "custom_recognition": "ArkWithdraw", "custom_recognition_param": "reset",
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "target": [1030, 70], "max_hit": 1, "next": ["Withdraw.Pick"]
+    "recognition": "Custom",
+    "custom_recognition": "ArkWithdraw",
+    "custom_recognition_param": "reset",
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "target": [
+      1030,
+      70
+    ],
+    "max_hit": 1,
+    "next": [
+      "Withdraw.Pick"
+    ]
   },
   "Withdraw.CloseShop": {
-    "recognition": "And", "all_of": ["ArkRestText", "Shop.Expanded", "Shop.CollapseText"],
-    "box_index": 2, "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1, "next": ["Withdraw.Pick"]
+    "recognition": "And",
+    "all_of": [
+      "ArkRestText",
+      "Shop.Expanded",
+      "Shop.CollapseText"
+    ],
+    "box_index": 2,
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "Withdraw.Pick"
+    ]
   },
   "Withdraw.Pick": {
-    "recognition": "Custom", "custom_recognition": "ArkWithdraw", "custom_recognition_param": "pick",
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1, "next": ["Withdraw.Click"], "timeout": 3500,
-    "on_error": ["Withdraw.CloseBoardDetails"]
+    "recognition": "Custom",
+    "custom_recognition": "ArkWithdraw",
+    "custom_recognition_param": "pick",
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "Withdraw.Click"
+    ],
+    "timeout": 3500,
+    "on_error": [
+      "Withdraw.CloseBoardDetails"
+    ]
   },
   "Withdraw.CloseBoardDetails": {
     "recognition": "Custom", "custom_recognition": "ArkWithdraw", "custom_recognition_param": "reset",
     "action": "Click", "pre_delay": 200, "post_delay": 200, "target": [1030, 70], "max_hit": 1
   },
   "Withdraw.Click": {
-    "recognition": "Custom", "custom_recognition": "ArkWithdraw", "custom_recognition_param": "withdraw",
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1, "next": ["Withdraw.PickHand"], "timeout": 5000
+    "recognition": "Custom",
+    "custom_recognition": "ArkWithdraw",
+    "custom_recognition_param": "withdraw",
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "Withdraw.Verified",
+      "Withdraw.PickHand"
+    ],
+    "timeout": 5000
   },
   "Withdraw.PickHand": {
-    "recognition": "Custom", "custom_recognition": "ArkWithdraw", "custom_recognition_param": "cleared",
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1, "next": ["Withdraw.CloseHandDetails"], "timeout": 3500
+    "recognition": "Custom",
+    "custom_recognition": "ArkWithdraw",
+    "custom_recognition_param": "cleared",
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "Withdraw.CloseHandDetails"
+    ],
+    "timeout": 3500
   },
   "Withdraw.CloseHandDetails": {
-    "recognition": "Custom", "custom_recognition": "ArkWithdraw", "custom_recognition_param": "hand",
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "target": [640, 495], "max_hit": 1, "next": ["Withdraw.Verified"], "timeout": 3500
+    "recognition": "Custom",
+    "custom_recognition": "ArkWithdraw",
+    "custom_recognition_param": "hand",
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "target": [
+      640,
+      495
+    ],
+    "max_hit": 1,
+    "next": [
+      "Withdraw.Verified"
+    ],
+    "timeout": 3500
   },
   "Withdraw.Verified": {
     "recognition": "Custom", "custom_recognition": "ArkWithdraw", "custom_recognition_param": "verified"

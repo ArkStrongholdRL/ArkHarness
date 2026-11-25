@@ -58,12 +58,25 @@
     "recognition": "OCR",
     "roi": [792, 21, 40, 27],
     "only_rec": true,
-    "expected": "^[0-9]+$"
+    "expected": "^[0-9]+$",
+    "model": "digits",
+    "color_filter": "OCR.LightText"
   },
   "Screen.Funds": {
     "recognition": "OCR",
     "roi": [1185, 514, 33, 27],
     "only_rec": true,
-    "expected": "^[0-9]+$"
+    "expected": "^[0-9]+$",
+    "model": "digits",
+    "color_filter": "OCR.GoldText"
+  },
+  "Screen.FundsZero": {
+    "recognition": "And",
+    "all_of": [
+      {"recognition": "OCR", "roi": [1185, 514, 33, 27], "only_rec": true,
+       "expected": "^0$", "model": "digits", "color_filter": "OCR.GoldText", "threshold": 0.50},
+      {"recognition": "OCR", "roi": [1188, 517, 27, 21], "only_rec": true,
+       "expected": "^0$", "model": "digits", "color_filter": "OCR.GoldText", "threshold": 0.75}
+    ]
   }
 }

@@ -1,10 +1,13 @@
 """Keep resource registration separate from one task's recognition context."""
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from threading import Lock
 
 from maa.custom_action import CustomAction
 from maa.custom_recognition import CustomRecognition
+from maa.define import NodeDetail
+from maa.tasker import Tasker
 
 
 READY_ACTION = "ArkRememberAndClickReady"
@@ -79,24 +82,34 @@ class SessionRecognizers:
 def task_recognition(tasker, name, recognition, *, ready_action=None):
     """Attach callbacks until their synchronous MFW task has finished."""
     session = getattr(tasker, "screen_recognizers", None)
-    if session is not None:
-        with session.bind(name, recognition, ready_action):
-            yield
-        return
+    if session is None:
+        raise RuntimeError("Tasker has no screen callbacks; initialize it through the screen session")
+    with session.bind(name, recognition, ready_action):
+        yield
 
-    # Keep compatibility with callers that supply their own Tasker and resource.
-    resource = tasker.resource
-    if not resource.register_custom_recognition(name, recognition):
-        raise RuntimeError(f"Could not register {name}")
-    try:
-        if ready_action is None:
-            yield
-        else:
-            if not resource.register_custom_action(READY_ACTION, ready_action):
-                raise RuntimeError(f"Could not register {READY_ACTION}")
-            try:
-                yield
-            finally:
-                resource.unregister_custom_action(READY_ACTION)
-    finally:
-        resource.unregister_custom_recognition(name)
+
+@dataclass(frozen=True)
+class RunResult:
+    succeeded: bool
+    nodes: tuple[NodeDetail, ...]
+
+    @property
+    def last(self) -> str:
+        return self.nodes[-1].name if self.nodes else ""
+
+    @property
+    def names(self) -> list[str]:
+        return [node.name for node in self.nodes]
+
+    def finished(self, *terminals: str) -> bool:
+        return self.succeeded and self.last in terminals
+
+    def failure(self, messages: dict[str, str]) -> str | None:
+        return next((messages[node.name] for node in self.nodes if node.name in messages), None)
+
+
+def run(tasker: Tasker, entry: str, override: dict | None = None) -> RunResult:
+    """Wait for the framework task and snapshot its result within the active callback binding."""
+    job = (tasker.post_task(entry, override) if override is not None else tasker.post_task(entry)).wait()
+    detail = job.get()
+    return RunResult(job.succeeded, tuple(detail.nodes) if detail else ())

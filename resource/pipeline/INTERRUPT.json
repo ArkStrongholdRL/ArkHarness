@@ -10,27 +10,71 @@
     "timeout": 6000
   },
   "Interrupt.OpenLeave": {
-    "recognition": "And", "all_of": ["Interrupt.Preparation"],
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "target": [59, 45], "max_hit": 1,
-    "next": ["Interrupt.ConfirmLeave"], "timeout": 6000
+    "recognition": "And",
+    "all_of": [
+      "Interrupt.Preparation"
+    ],
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "target": [
+      59,
+      45
+    ],
+    "max_hit": 1,
+    "next": [
+      "Interrupt.ConfirmLeave"
+    ],
+    "timeout": 6000
   },
   "Interrupt.OpenLeaveToAbandon": {
-    "recognition": "And", "all_of": ["Interrupt.Preparation"],
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "target": [59, 45], "max_hit": 1,
-    "next": ["Interrupt.ConfirmLeaveToAbandon"], "timeout": 6000
+    "recognition": "And",
+    "all_of": [
+      "Interrupt.Preparation"
+    ],
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "target": [
+      59,
+      45
+    ],
+    "max_hit": 1,
+    "next": [
+      "Interrupt.ConfirmLeaveToAbandon"
+    ],
+    "timeout": 6000
   },
   "Interrupt.Preparation": {
     "recognition": "And", "all_of": ["ArkRest", "ArkExpectedRound"]
   },
   "Interrupt.ConfirmLeave": {
-    "recognition": "And", "all_of": ["Interrupt.LeaveConfirmation"],
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
-    "next": ["Interrupt.SavedEntrance"], "timeout": 18000
+    "recognition": "And",
+    "all_of": [
+      "Interrupt.LeaveConfirmation"
+    ],
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "Interrupt.SavedEntrance"
+    ],
+    "timeout": 18000
   },
   "Interrupt.ConfirmLeaveToAbandon": {
-    "recognition": "And", "all_of": ["Interrupt.LeaveConfirmation"],
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
-    "next": ["Interrupt.ContinueToAbandon"], "timeout": 18000
+    "recognition": "And",
+    "all_of": [
+      "Interrupt.LeaveConfirmation"
+    ],
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "Interrupt.ContinueToAbandon"
+    ],
+    "timeout": 18000
   },
   "Interrupt.LeaveConfirmation": {
     "recognition": "And", "all_of": ["Lifecycle.LeaveConfirm", "Interrupt.ConfirmText"], "box_index": 1
@@ -40,19 +84,53 @@
     "next": ["Interrupt.OpenAbandon"], "timeout": 5500
   },
   "Interrupt.OpenAbandon": {
-    "recognition": "And", "all_of": ["Lifecycle.Entrance", "Interrupt.SavedRound", "Interrupt.AbandonText"],
-    "box_index": 2, "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
-    "next": ["Interrupt.ConfirmAbandon"], "timeout": 6000
+    "recognition": "And",
+    "all_of": [
+      "Lifecycle.Entrance",
+      "Interrupt.SavedRound",
+      "Interrupt.AbandonText"
+    ],
+    "box_index": 2,
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "Interrupt.ConfirmAbandon"
+    ],
+    "timeout": 6000
   },
   "Interrupt.ConfirmAbandon": {
-    "recognition": "And", "all_of": ["Lifecycle.AbandonConfirm", "Interrupt.ConfirmText"],
-    "box_index": 1, "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
-    "next": ["Interrupt.ReturnHome"], "timeout": 25000
+    "recognition": "And",
+    "all_of": [
+      "Lifecycle.AbandonConfirm",
+      "Interrupt.ConfirmText"
+    ],
+    "box_index": 1,
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "Interrupt.ReturnHome"
+    ],
+    "timeout": 25000
   },
   "Interrupt.ReturnHome": {
-    "recognition": "And", "all_of": ["Lifecycle.Interrupted", "Interrupt.HomeText"],
-    "box_index": 1, "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
-    "next": ["Interrupt.NewEntrance"], "timeout": 18000
+    "recognition": "And",
+    "all_of": [
+      "Lifecycle.Interrupted",
+      "Interrupt.HomeText"
+    ],
+    "box_index": 1,
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "Interrupt.NewEntrance"
+    ],
+    "timeout": 18000
   },
   "Interrupt.SavedEntrance": {
     "recognition": "And", "all_of": ["Lifecycle.Entrance", "Interrupt.SavedRound", "ArkSnapshot"]
@@ -82,6 +160,7 @@
     "recognition": "OCR", "roi": [1024, 626, 202, 67], "expected": "^返回主页$"
   },
   "Result.PassedRounds": {
-    "recognition": "OCR", "roi": [103, 297, 135, 84], "only_rec": true, "expected": "^[0-9]+$"
+    "recognition": "OCR", "roi": [103, 297, 135, 84], "only_rec": true, "expected": "^[0-9]+$",
+    "model": "digits", "color_filter": "OCR.RedText"
   }
 }

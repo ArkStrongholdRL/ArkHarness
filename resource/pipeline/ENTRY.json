@@ -1,23 +1,62 @@
 {
   "Entry.EnterLayout": {
+    "anchor": {"Entry.ActiveRoute": "Entry.Route"},
     "next": ["Entry.Route"]
   },
+  "Entry.EnterBriefing": {
+    "anchor": {"Entry.ActiveRoute": "Entry.RouteBriefing"},
+    "next": ["Entry.RouteBriefing"]
+  },
+  "Entry.EnterSquad": {
+    "anchor": {"Entry.ActiveRoute": "Entry.RouteSquad"},
+    "next": ["Entry.RouteSquad"]
+  },
   "Entry.Route": {
-    "next": ["ArkReturnedRest", "Entry.ClickEvent", "Entry.SavedMatch", "Entry.ClickSolo", "Entry.ClickStart", "Entry.BriefingCheckpoint",
-      "Entry.ClickBriefingReady", "Entry.CommanderRequired", "Entry.SquadCheckpoint", "Entry.ClickSquadReady"],
+    "next": ["ArkReturnedRest", "Entry.ClickEvent", "Entry.ClickSolo", "Entry.ClickStart",
+      "Entry.ClickBriefingReady", "Entry.CommanderRequired", "Entry.ClickSquadReady"],
+    "rate_limit": 350,
+    "timeout": 45000
+  },
+  "Entry.RouteBriefing": {
+    "next": ["ArkReturnedRest", "Entry.ClickEvent", "Entry.SavedMatch", "Entry.ClickNewSolo", "Entry.ClickStart",
+      "Entry.BriefingCheckpoint", "Entry.CommanderRequired", "Entry.SquadCheckpoint"],
+    "rate_limit": 350,
+    "timeout": 45000
+  },
+  "Entry.RouteSquad": {
+    "next": ["ArkReturnedRest", "Entry.ClickEvent", "Entry.SavedMatch", "Entry.ClickNewSolo", "Entry.ClickStart",
+      "Entry.ClickBriefingReady", "Entry.CommanderRequired", "Entry.SquadCheckpoint"],
     "rate_limit": 350,
     "timeout": 45000
   },
   "Entry.OpenEvent": {"next": ["Entry.EventEntrance", "Entry.ClickEventToEntrance"], "timeout": 6000},
   "Entry.ClickEvent": {
-    "recognition": "And", "all_of": ["Entry.EventFromHome"],
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
-    "next": ["Entry.Route"], "timeout": 20000
+    "recognition": "And",
+    "all_of": [
+      "Entry.EventFromHome"
+    ],
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "[Anchor]Entry.ActiveRoute"
+    ],
+    "timeout": 20000
   },
   "Entry.ClickEventToEntrance": {
-    "recognition": "And", "all_of": ["Entry.EventFromHome"],
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
-    "next": ["Entry.EventEntrance"], "timeout": 20000
+    "recognition": "And",
+    "all_of": [
+      "Entry.EventFromHome"
+    ],
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "Entry.EventEntrance"
+    ],
+    "timeout": 20000
   },
   "Entry.EventFromHome": {
     "recognition": "And", "all_of": ["Lifecycle.GameHome", "Entry.EventBanner"], "box_index": 1
@@ -30,10 +69,11 @@
     ]
   },
   "Entry.EventBanner": {
-    "recognition": "OCR", "roi": [1024, 179, 256, 95], "expected": "^卫戍协议$"
+    "recognition": "OCR", "roi": [1024, 179, 256, 95], "expected": "^卫戍协议$",
+    "replace": [["^卫成协议$", "卫戍协议"]]
   },
   "Entry.SavedMatch": {
-    "enabled": false, "recognition": "And", "all_of": ["Lifecycle.Entrance", "Entry.ResumeSoloText"]
+    "recognition": "And", "all_of": ["Lifecycle.Entrance", "Entry.ResumeSoloText"]
   },
   "Entry.ResumeSoloText": {
     "recognition": "OCR", "roi": [978, 597, 291, 107], "expected": "当前回合\\s*[0-9]+"
@@ -43,12 +83,41 @@
   },
   "Entry.ClickSolo": {
     "recognition": "And",
-    "all_of": ["Lifecycle.Entrance", "Entry.SoloButton"],
+    "all_of": [
+      "Lifecycle.Entrance",
+      "Entry.SoloButton"
+    ],
     "box_index": 1,
-    "action": "Click", "target": [1116, 647], "pre_delay": 200,
+    "action": "Click",
+    "target": [
+      1116,
+      647
+    ],
+    "pre_delay": 200,
     "max_hit": 1,
     "post_delay": 700,
-    "next": ["Entry.Route"]
+    "next": [
+      "[Anchor]Entry.ActiveRoute"
+    ]
+  },
+  "Entry.ClickNewSolo": {
+    "recognition": "And",
+    "all_of": [
+      "Lifecycle.Entrance",
+      "Entry.NewSoloText"
+    ],
+    "box_index": 1,
+    "action": "Click",
+    "target": [
+      1116,
+      647
+    ],
+    "pre_delay": 200,
+    "max_hit": 1,
+    "post_delay": 700,
+    "next": [
+      "[Anchor]Entry.ActiveRoute"
+    ]
   },
   "Entry.SoloButton": {
     "recognition": "OCR",
@@ -61,7 +130,7 @@
     "box_index": 1,
     "action": "Click", "pre_delay": 200, "post_delay": 200,
     "max_hit": 1,
-    "next": ["Entry.Route"]
+    "next": ["[Anchor]Entry.ActiveRoute"]
   },
   "Entry.StartButton": {
     "recognition": "OCR",
@@ -70,14 +139,20 @@
   },
   "Entry.ClickBriefingReady": {
     "recognition": "And",
-    "all_of": ["Lifecycle.Briefing", "Entry.ReadyButton"],
+    "all_of": [
+      "Lifecycle.Briefing",
+      "Entry.ReadyButton"
+    ],
     "box_index": 1,
-    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
     "max_hit": 1,
-    "next": ["Entry.Route"]
+    "next": [
+      "[Anchor]Entry.ActiveRoute"
+    ]
   },
   "Entry.BriefingCheckpoint": {
-    "enabled": false,
     "recognition": "And", "all_of": ["Lifecycle.Briefing", "ArkSnapshot"]
   },
   "Entry.CommanderRequired": {
@@ -85,7 +160,6 @@
     "all_of": ["Lifecycle.Strategy", "ArkSnapshot"]
   },
   "Entry.SquadCheckpoint": {
-    "enabled": false,
     "recognition": "And", "all_of": ["Lifecycle.Squad", "ArkSnapshot"]
   },
   "Entry.ClickSquadReady": {

@@ -36,5 +36,10 @@
   "ArkRestNotRecovered": {
     "next": ["ArkReturnedRest"],
     "timeout": 3000
+  },
+  "Wait.Stable": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
+    "timeout": 3000
   }
 }

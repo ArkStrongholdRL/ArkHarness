@@ -180,6 +180,7 @@ class Track:
 
     def _stow(self, p):
         """engine _stowSplit with allowTemp: the row's free slot, else the hidden queue (appended)."""
+        p.promotion_round = None  # A loose projection has no scheduled effect.
         i = self._handslot(p.kind)
         if i >= 0:
             if p.kind == "item":
@@ -678,7 +679,7 @@ class Track:
                 results.append({"item": item.uid, "target": holder.uid, "before": before, "after": holder.id})
         return results
 
-    def equip(self, item_uid, target_uid, replace_uid=None) -> bool:
+    def equip(self, item_uid, target_uid, replace_uid=None, *, promotion_round: int | None = None) -> bool:
         """sidecar `equip {item, target}`: a loose item onto a chess (at most 2; a full carrier replaces replace_uid or the oldest)."""
         loc = self._loc_by_uid(item_uid)
         tgt = self._loc_by_uid(target_uid)
@@ -690,6 +691,7 @@ class Track:
         if len(holder.items) >= 2:
             j = next((i for i, x in enumerate(holder.items) if x.uid == replace_uid), 0)
             holder.items.pop(j)  # the replaced item is destroyed
+        item.promotion_round = promotion_round
         holder.items.append(item)
         self._recompute()
         return True

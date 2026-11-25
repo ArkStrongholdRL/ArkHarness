@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -13,11 +14,12 @@ from maa.tasker import Tasker
 from ..wave import match_preview
 from .bounty import SLOTS as BOUNTY_SLOTS
 from .briefing import choose_bond_group, inspect_briefing
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
+from .capture import OCR_RESOURCE, add_session_args, session
 from .commander import select as select_commander
-from .native import Frame, recognition_data
+from .native import MIN_NAME_SCORE, Frame, recognition_data
+from .names import match_name
 from .read import CATALOG, ROOT, Reader, clean, integer, read_json, read_screen
-from .session import task_recognition
+from .session import run as run_task, task_recognition
 from .state import (
     BATTLE_ACTIONS, BRIEFING_ACTIONS, DRAFT_SCREENS, INSPECTIONS, LIVE_SCREENS, LiveScreen, require_action, require_return,
     screen_snapshot,
@@ -33,7 +35,7 @@ ENTRIES = {
     "inspect-enemies": ("ArkInspectEnemies", "ArkReturnedRest"),
     "inspect-bond": ("ArkInspectBond", "ArkReturnedRest"),
     "start-battle": ("ArkStartBattle", "ArkRestAfterBattle"),
-    "ready-battle": ("ArkStartBattle", "ArkBattleStarted"),
+    "ready-battle": ("ArkReadyBattle", "ArkBattleStarted"),
     "wait-battle": ("ArkWaitBattle", "ArkRestAfterBattle"),
     "leave-match": ("Interrupt.Leave", "Interrupt.SavedEntrance"),
     "interrupt-match": ("Interrupt.End", "Interrupt.NewEntrance"),
@@ -127,8 +129,11 @@ class NavigationRecognition(CustomRecognition):
         return x + width // 2, 89, 1, 1
 
     def named_bond(self, frame: Frame) -> tuple | None:
+        if self.reader is None:
+            return None
         candidates = [box[0] + 27 for box in frame.bond_boxes()
-                      if clean(frame.text("Screen.BondName", roi=box)) == self.bond]
+                      if match_name(clean(frame.text("Screen.BondName", roi=box, min_score=MIN_NAME_SCORE)),
+                                    self.reader.bonds) == self.bond]
         return (candidates[0], 89, 1, 1) if len(candidates) == 1 else None
 
     def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | tuple | None:
@@ -236,33 +241,22 @@ def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_m
     entry, terminal = ENTRIES[recognition.action]
     if recognition.action == "inspect-enemies" and scroll_preview:
         entry = "ArkInspectEnemiesScrolled"
+    if recognition.action == "enter-layout" and checkpoint is not None:
+        entry = {"briefing": "Entry.EnterBriefing", "squadSelection": "Entry.EnterSquad"}[checkpoint]
     override = {
         "ArkReadyOnce": {"timeout": timeout_ms},
         "ArkConfirmReady": {"timeout": timeout_ms},
         "ArkWaitBattle": {"timeout": timeout_ms},
     }
-    if recognition.action == "ready-battle":
-        override["ArkBattleStarted"] = {"enabled": True}
-    if checkpoint is not None:
-        override["Entry.SavedMatch"] = {"enabled": True}
-        override["Entry.SoloButton"] = {"expected": "^独立模拟$"}
-        override["Entry.SquadCheckpoint"] = {"enabled": True}
-        override["Entry.ClickSquadReady"] = {"enabled": False}
-        if checkpoint == "briefing":
-            override["Entry.BriefingCheckpoint"] = {"enabled": True}
-            override["Entry.ClickBriefingReady"] = {"enabled": False}
     ready_action = ReadyAction(recognition) if recognition.action in {"start-battle", "ready-battle"} else None
     with task_recognition(tasker, "ArkNavigation", recognition, ready_action=ready_action):
-        job = tasker.post_task(entry, override).wait()
-        detail = job.get()
-        steps = detail.nodes if detail else []
+        job = run_task(tasker, entry, override)
+        steps = job.nodes
     recognition.collect_results(steps)
-    nodes = [node.name for node in steps]
-    last = nodes[-1] if nodes else ""
-    recognition.steps = nodes
-    failed_at = next((name for name in nodes if name in ERRORS), None)
-    if failed_at:
-        message = ERRORS[failed_at]
+    last = job.last
+    recognition.steps = job.names
+    message = job.failure(ERRORS)
+    if message:
         if last == "ArkReturnedRest":
             message += "; returned to the preparation anchor"
         raise RuntimeError(message)
@@ -296,6 +290,33 @@ def observe_snapshot(tasker: Tasker) -> dict:
     except RuntimeError:
         return {"screen": "unknown", "round": None, "canReady": False}
     return recognition.snapshot
+
+
+# Regions the waits watch. CENTER_ROI avoids the countdown (top right) and the latency readout (top left). SHOP_CARDS_ROI is
+# the union of every card box in calib/slots.json shop layouts (the reward cards slide into this row).
+CENTER_ROI = (200, 120, 880, 480)
+SHOP_CARDS_ROI = (135, 520, 951, 184)
+
+
+def wait_stable(tasker: Tasker, roi, *, target=None, time_ms: int = 150, timeout_ms: int = 3000) -> float:
+    """Wait until the `target` box has not changed for `time_ms`, or until `timeout_ms`. No input is sent.
+
+    The MFW node Wait.Stable only carries post_wait_freezes, so this returns as soon as the box is still and never later
+    than timeout_ms. `target` must be explicit: MFW skips a wait_freezes that has no target box. Returns elapsed ms.
+    """
+    if target is None:
+        raise ValueError("wait_stable requires an explicit target box")
+    if time_ms <= 0 or timeout_ms <= 0:
+        raise ValueError("wait_stable times must be positive")
+    override = {"Wait.Stable": {
+        "roi": list(roi), "timeout": int(timeout_ms),
+        "post_wait_freezes": {"target": list(target), "time": int(time_ms), "rate_limit": 50, "threshold": 0.99,
+                              "timeout": int(timeout_ms)},
+    }}
+    started = time.perf_counter()
+    if not run_task(tasker, "Wait.Stable", override).succeeded:
+        raise RuntimeError("Wait.Stable did not run")
+    return (time.perf_counter() - started) * 1000
 
 
 def observe_screen(tasker: Tasker) -> LiveScreen:
@@ -341,7 +362,7 @@ def enter_layout(tasker: Tasker, slots: dict, catalog: Path, before: dict, timeo
         if not commander:
             raise RuntimeError("At commander selection; pass --commander with the displayed name to continue")
         result["commander"] = select_commander(tasker, slots["commander"], commander, resource_path=resource_path,
-                                               fallback_names=commander_fallbacks)
+                                               fallback_names=commander_fallbacks, catalog=catalog)
         run_navigation(tasker, recognition, timeout_ms, checkpoint=stop_at)
         result["steps"].extend(recognition.steps)
         screen = recognition.snapshot["screen"]
@@ -504,10 +525,7 @@ def main() -> None:
     parser.add_argument("--confirm-interrupt", action="store_true",
                         help="Allow the current saved simulation to settle and be removed")
     parser.add_argument("--timeout", type=float, default=95, help="Seconds to verify a later preparation round")
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
+    add_session_args(parser, catalog=CATALOG)
     args = parser.parse_args()
     if not np.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be positive and finite")
@@ -539,10 +557,7 @@ def main() -> None:
     if (args.action == "wait-battle") != (args.battle_round is not None):
         parser.error("--battle-round is required for wait-battle")
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        tasker = load_ocr(connect(args.adb, args.address), args.ocr_resource)
+        tasker = session(args.adb, args.address, args.ocr_resource).tasker
         slots = read_json(ROOT / "calib/slots.json")
         result = execute(tasker, slots, args.action, args.catalog, bond, max(1, round(args.timeout * 1000)),
                          commander=commander, resource_path=args.ocr_resource, slot=args.slot,

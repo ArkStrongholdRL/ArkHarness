@@ -8,9 +8,9 @@ from maa.define import MaaAdbInputMethodEnum
 from maa.tasker import Tasker
 
 from .board_read import read_board_tiles
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
+from .capture import add_session_args, session
 from .deploy import FACING_OFFSETS, move_board, read_board, tile_point
-from .read import CATALOG, ROOT, Reader, clean, read_json
+from .read import CATALOG, ROOT, Reader, clean
 
 
 class SwapUnverified(RuntimeError):
@@ -100,18 +100,12 @@ def main() -> None:
     parser.add_argument("--target-name", required=True)
     parser.add_argument("--facing", required=True, choices=FACING_OFFSETS)
     parser.add_argument("--board", type=Path, default=ROOT / "calib/board.json")
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
+    add_session_args(parser, catalog=CATALOG)
     args = parser.parse_args()
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        tasker = load_ocr(connect(args.adb, args.address, input_methods=MaaAdbInputMethodEnum.Maatouch),
-                          args.ocr_resource)
-        reader = Reader(args.catalog, read_json(ROOT / "calib/slots.json"))
+        screen_session = session(args.adb, args.address, args.ocr_resource,
+                                 input_methods=MaaAdbInputMethodEnum.Maatouch, catalog=args.catalog)
+        tasker, reader = screen_session.tasker, screen_session.reader
         result = swap_board(tasker, reader, read_board(args.board), tuple(args.source), tuple(args.target),
                             args.source_name, args.target_name, args.facing)
         print(json.dumps(result, ensure_ascii=False))

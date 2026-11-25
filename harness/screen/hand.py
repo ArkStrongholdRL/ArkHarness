@@ -8,10 +8,10 @@ from maa.context import Context
 from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
+from .capture import add_session_args, session
 from .native import Frame, completed_data
-from .session import task_recognition
-from .read import CATALOG, ROOT, Reader, chess_identity, integer, read_json
+from .session import run as run_task, task_recognition
+from .read import CATALOG, Reader, chess_identity, integer, screen_integer
 
 
 # An operator standing on the bench carries a dark tier badge above its slot (collapsed-shop view). Measured on device:
@@ -69,7 +69,7 @@ class HandRecognition(CustomRecognition):
         hud = {
             "round": integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)"),
             "funds": integer(frame.text("Screen.Funds")),
-            "remaining": integer(frame.text("Screen.DeployCollapsed"), r"剩余可放置角色:([0-9]+)"),
+            "remaining": screen_integer(frame, "Screen.DeployCollapsed"),
             "stageId": self.reader.stage_hint or frame.stage_id(),
         }
         if None in hud.values() or (self.anchor is not None and self.anchor != hud):
@@ -116,9 +116,8 @@ def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, 
     with task_recognition(tasker, "ArkHand", recognition):
         for position, slot in enumerate(selected):
             recognition.center, recognition.anchor = centers[slot], anchor
-            job = tasker.post_task("Hand.InspectNext" if position else "Hand.Inspect").wait()
-            detail = job.get()
-            nodes = detail.nodes if detail else []
+            job = run_task(tasker, "Hand.InspectNext" if position else "Hand.Inspect")
+            nodes = job.nodes
             result = completed_data(nodes, "Hand.Empty", "Hand.Closed")
             anchor = completed_data(nodes, "Hand.Pick")
             if not job.succeeded or result is None or anchor is None:
@@ -133,17 +132,11 @@ def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hand-slot", type=int, action="append", dest="indices")
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
+    add_session_args(parser, catalog=CATALOG)
     args = parser.parse_args()
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        reader = Reader(args.catalog, read_json(ROOT / "calib/slots.json"))
-        tasker = load_ocr(connect(args.adb, args.address), args.ocr_resource)
+        screen_session = session(args.adb, args.address, args.ocr_resource, catalog=args.catalog)
+        tasker, reader = screen_session.tasker, screen_session.reader
         result = read_hand(tasker, reader, args.indices)
         print(json.dumps(result, ensure_ascii=False))
     except (OSError, RuntimeError, ValueError) as error:

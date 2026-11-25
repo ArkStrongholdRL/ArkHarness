@@ -7,13 +7,29 @@ from maa.context import Context
 from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
-from .native import Frame, completed_data
-from .session import task_recognition
-from .read import Reader
+from .names import match_name
+from .native import MIN_NAME_SCORE, Frame, completed_data
+from .session import run as run_task, task_recognition
+from .read import Reader, clean
 
 
 GROUP_REGIONS = ([22, 130, 423, 447], [445, 130, 444, 447])
+# The briefing layout is fixed: page title, enemy leader name, core bond names. Reading just these beats a full-screen OCR.
+BRIEFING_TEXT_ROIS = ([400, 10, 320, 50], [915, 295, 345, 140], [15, 240, 875, 235])
 LOG = logging.getLogger(__name__)
+
+
+def enabled_addon_bonds(frame: Frame, reader: Reader) -> list[str]:
+    """Add-on bond ids listed in the briefing's add-on row. A bond missing from the row is disabled for the match."""
+    found = set()
+    for row in frame.rows("Briefing.AddonName"):
+        if row.score < MIN_NAME_SCORE:
+            continue
+        candidates = [key for key, data in reader.bonds.get(match_name(clean(row.text), reader.bonds), [])
+                      if not data.get("isCore")]
+        if len(candidates) == 1:
+            found.add(candidates[0])
+    return sorted(found)
 
 
 class BriefingRecognition(CustomRecognition):
@@ -29,6 +45,7 @@ class BriefingRecognition(CustomRecognition):
         frame = Frame(context, argv.image)
         if not frame.hit("Lifecycle.Briefing"):
             return None
+        frame.text_rois = BRIEFING_TEXT_ROIS
         observed = self.reader.read(frame)
         state = observed["match"]
         choice = state["bondChoice"]
@@ -47,11 +64,9 @@ class BriefingRecognition(CustomRecognition):
         if kind == "switch":
             if selected is None or selected == self.group:
                 return None
-            candidates = frame.rows("Briefing.GroupButton", roi=GROUP_REGIONS[self.group])
-            if len(candidates) != 1:
-                LOG.debug("No unique selection button was verified for the requested group")
-                return None
-            return self.AnalyzeResult(tuple(candidates[0].box), {"groups": groups})
+            # Verified on device: the unselected group has no text button; tapping inside its panel selects it.
+            x, y, width, height = GROUP_REGIONS[self.group]
+            return self.AnalyzeResult((x + width // 2 - 20, y + height // 2 - 20, 40, 40), {"groups": groups})
         if kind == "confirm":
             if selected != self.group:
                 LOG.debug("The requested bond group was not highlighted")
@@ -65,9 +80,12 @@ class BriefingRecognition(CustomRecognition):
             hit = (0, 0, 1, 1)
         else:
             return None
-        return self.AnalyzeResult(hit, {"groups": groups, "previewSelected": selected,
-                                        "disabledBonds": state["disabledBonds"], "bossId": state["bossId"],
-                                        "modeId": observed["config"]["modeId"]})
+        detail = {"groups": groups, "previewSelected": selected,
+                  "disabledBonds": state["disabledBonds"], "bossId": state["bossId"],
+                  "modeId": observed["config"]["modeId"]}
+        if kind == "read":  # the add-on row costs an extra OCR pass; only the inspection result needs it
+            detail["enabledAddonBonds"] = enabled_addon_bonds(frame, self.reader)
+        return self.AnalyzeResult(hit, detail)
 
 
 def inspect_briefing(tasker: Tasker, reader: Reader) -> dict:
@@ -93,12 +111,11 @@ def run_briefing(tasker: Tasker, reader: Reader, *, group: int | None,
     entry, terminal = ("Briefing.Inspect", "Briefing.Read") if group is None else (
         "Briefing.Select", "Briefing.Confirmed")
     with task_recognition(tasker, "ArkBriefing", recognition):
-        job = tasker.post_task(entry).wait()
-    detail = job.get()
-    nodes = detail.nodes if detail else []
+        job = run_task(tasker, entry)
+    nodes = job.nodes
     steps = [node.name for node in nodes]
     result = completed_data(nodes, "Briefing.Read" if group is None else "Briefing.Confirm")
-    if job.succeeded and steps and steps[-1] == terminal and result is not None:
+    if job.finished(terminal) and result is not None:
         if group is None:
             return result
         return {**result, "bondChoice": {"groups": result["groups"], "picked": group},

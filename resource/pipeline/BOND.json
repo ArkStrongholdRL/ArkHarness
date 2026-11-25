@@ -46,9 +46,14 @@
   },
   "Screen.BondRing": {
     "recognition": "TemplateMatch",
-    "template": "bond-ring-left.png",
+    "template": ["bond-ring-left.png", "bond-ring-active-left.png"],
     "roi": [200, 64, 880, 49],
-    "threshold": 0.79,
+    "threshold": [0.79, 0.77],
+    "order_by": "Horizontal"
+  },
+  "Screen.BondNameRow": {
+    "recognition": "OCR",
+    "roi": [200, 108, 880, 32],
     "order_by": "Horizontal"
   },
   "Screen.BondName": {
@@ -57,13 +62,34 @@
     "roi_offset": [-10, 48, 58, -26],
     "only_rec": true
   },
+  "Leader.BondRing": {
+    "recognition": "TemplateMatch",
+    "template": ["bond-ring-left.png", "bond-ring-active-left.png"],
+    "roi": [200, 64, 880, 49],
+    "threshold": [0.79, 0.77],
+    "order_by": "Horizontal"
+  },
+  "Leader.BondName": {
+    "recognition": "OCR",
+    "roi_offset": [-10, 50, 58, -28],
+    "only_rec": true
+  },
+  "Leader.BondLayers": {
+    "recognition": "OCR",
+    "roi_offset": [6, 34, 26, -26],
+    "only_rec": true,
+    "expected": "^[0-9]+$",
+    "model": "digits",
+    "color_filter": "OCR.LightText"
+  },
   "Screen.BondLayers": {
     "recognition": "OCR",
     "roi": "Screen.BondRing",
-    "roi_offset": [18, 33, 2, -29],
+    "roi_offset": [6, 34, 26, -26],
     "only_rec": true,
-    "replace": [["^[Oo]$", "0"]],
-    "expected": "^[0-9]+$"
+    "expected": "^[0-9]+$",
+    "model": "digits",
+    "color_filter": "OCR.LightText"
   },
   "Screen.BondDetailName": {
     "recognition": "OCR",

@@ -29,6 +29,13 @@
     ]
   },
   "ArkStartBattle": {
+    "anchor": {"Battle.Started": ""},
+    "next": ["ArkReadyOnce"],
+    "timeout": 6000,
+    "on_error": ["ArkUnexpectedScreen"]
+  },
+  "ArkReadyBattle": {
+    "anchor": {"Battle.Started": "ArkBattleStarted"},
     "next": ["ArkReadyOnce"],
     "timeout": 6000,
     "on_error": ["ArkUnexpectedScreen"]
@@ -40,7 +47,7 @@
     "max_hit": 1,
     "rate_limit": 650,
     "timeout": 95000,
-    "next": ["ArkRestAfterBattle", "ArkBountyAfterBattle", "ArkMatchEnded", "ArkDisconnected", "ArkBattleStarted", "ArkConfirmReady"],
+    "next": ["ArkRestAfterBattle", "ArkBountyAfterBattle", "ArkMatchEnded", "ArkDisconnected", "[Anchor]Battle.Started", "ArkConfirmReady"],
     "on_error": ["ArkBattleNotVerified"]
   },
   "ArkClickReady": {"action": "Click"},
@@ -55,7 +62,7 @@
     "max_hit": 1,
     "rate_limit": 650,
     "timeout": 95000,
-    "next": ["ArkRestAfterBattle", "ArkBountyAfterBattle", "ArkMatchEnded", "ArkDisconnected", "ArkBattleStarted"],
+    "next": ["ArkRestAfterBattle", "ArkBountyAfterBattle", "ArkMatchEnded", "ArkDisconnected", "[Anchor]Battle.Started"],
     "on_error": ["ArkBattleNotVerified"]
   },
   "ArkWaitBattle": {
@@ -63,7 +70,6 @@
     "rate_limit": 650, "timeout": 95000, "on_error": ["ArkBattleNotVerified"]
   },
   "ArkBattleStarted": {
-    "enabled": false,
     "recognition": "And", "all_of": [
       {"recognition": "Or", "any_of": ["Battle.Active", "Battle.LeaderActive"]}, "ArkStartedRound"
     ]

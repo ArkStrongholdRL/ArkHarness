@@ -215,21 +215,48 @@ export function runOp(E, { m, ps }, op, req = {}) {
     return { ok: true, legal: result?.ok === true, reason: result?.error ?? null };
   }
   const { bot } = E;
+  const arrangeFinal = () => {
+    addRearBondTraits(bot, m, ps);
+    bot.runSteps(bot.arrangeSteps(m, ps, { final: true }));
+  };
   if (op === 'tail') applyOps(ps, req.ops || []); // Python's resolveTemp, before the recording: not ours to return
   const ops = recording(ps, () => {
-    if (op === 'layout') bot.runSteps(bot.arrangeSteps(m, ps, req.final ? { final: true } : {}));
+    if (op === 'layout') {
+      if (req.final) arrangeFinal();
+      else bot.runSteps(bot.arrangeSteps(m, ps));
+    }
     else if (op === 'equip') bot.equipItems(m, ps);
     else if (op === 'end') {
       bot.runSteps(bot.arrangeSteps(m, ps));
       bot.equipItems(m, ps);
       if (req.legacyCommand) { if (ps.command) bot.botUseCommand(m, ps, true); } // parity only: legacy decides the battle mark
       else if (req.command?.effectId) ps.useCommand(req.command.effectId, req.command.target);
-      bot.runSteps(bot.arrangeSteps(m, ps, { final: true }));
+      arrangeFinal();
     } else if (op === 'tail') {
       if (!ps.hand.some((p) => p == null)) bot.freeHandSlot(m, ps);
     } else throw new Error(`unknown op ${op}`);
   });
-  return { ok: true, ops, ...seatResult(ps) };
+  const result = { ok: true, ops, ...seatResult(ps) };
+  if (op === 'end' && [ps.gd.mode.bossRound, ps.gd.mode.hiddenRound].includes(m.round)) {
+    result.bonds = Object.entries(E.computeBonds(ps.gd, ps))
+      .map(([bondId, { count, tier, layers }]) => ({ bondId, count, tier, layers }));
+  }
+  return result;
+}
+
+function addRearBondTraits(bot, m, ps) {
+  for (const id of new Set(ps.allChess().map((piece) => piece.id))) {
+    const chess = ps.gd.chess(id);
+    const rear = (chess?.garrisonIds || []).map((gid) => ps.gd.garrison(gid)).find((trait) =>
+      trait?.eventType === 'IN_BATTLE' && trait.bbStr?.bond_type === 'bond_allinrange'
+      && trait.bbStr.bond_range_id === 'b-4');
+    if (!rear) continue;
+    const traits = bot.positionTraitsOf(m, ps, chess);
+    if (traits.some((trait) => trait.kind === 'pos' && trait.off === -1 && trait.on === rear.eventType)) continue;
+    // Estimate three triggers, with the catalog's amount and per-battle cap.
+    const layers = Math.min(3 * rear.bb.bond_add_count, rear.bb.max_add_count_per_battle);
+    if (layers > 0) traits.push({ kind: 'pos', off: -1, n: layers, on: rear.eventType });
+  }
 }
 
 async function main() {

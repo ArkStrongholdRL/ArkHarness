@@ -3,8 +3,10 @@
 import argparse
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
+from typing import TYPE_CHECKING
 
 from maa.controller import AdbController, Controller
 from maa.define import MaaAdbInputMethodEnum, MaaAdbScreencapMethodEnum, OCRResult
@@ -16,12 +18,57 @@ from PIL import Image
 
 from .session import SessionRecognizers
 
+if TYPE_CHECKING:
+    from .read import Reader
+
 
 ADB_PATH = Path(os.environ.get("ARK_ADB", "D:/ADB/platform-tools/adb.exe"))
 ADB_ADDRESS = "127.0.0.1:16384"
 SAMPLES = Path(__file__).resolve().parents[2] / "samples"
 OCR_RESOURCE = SAMPLES.parent / "resource"
 MUMU_PATH = Path(os.environ.get("ARK_MUMU", "D:/Program Files/Netease/MuMu"))
+
+
+def add_session_args(parser, *, catalog=None, ocr=True):
+    parser.add_argument("--adb", type=Path, default=ADB_PATH)
+    parser.add_argument("--address", default=ADB_ADDRESS)
+    if ocr:
+        parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
+    if catalog is not None:
+        parser.add_argument("--catalog", type=Path, default=catalog)
+
+
+def configure_tasker(log_dir: Path = SAMPLES / "_logs", *, save_draw=False, save_on_error=False):
+    Tasker.set_log_dir(log_dir)
+    if save_draw is not None:
+        Tasker.set_save_draw(save_draw)
+    if save_on_error is not None:
+        Tasker.set_save_on_error(save_on_error)
+
+
+@dataclass
+class ScreenSession:
+    controller: Controller
+    tasker: Tasker | None
+    reader: "Reader | None"
+
+
+def session(adb_path=ADB_PATH, address=ADB_ADDRESS, resource_path=OCR_RESOURCE, *,
+            controller=None, input_methods=MaaAdbInputMethodEnum.AdbShell, mumu=None,
+            catalog=None, slots=None, log_dir=SAMPLES / "_logs", save_draw=False, save_on_error=False):
+    """Build a live or offline screen session with the caller's existing device and logging options."""
+    configure_tasker(log_dir, save_draw=save_draw, save_on_error=save_on_error)
+    reader = None
+    if catalog is not None:
+        from .read import Reader, read_json
+
+        if slots is None:
+            slots = read_json(SAMPLES.parent / "calib/slots.json")
+        reader = Reader(catalog, slots)
+    if controller is None:
+        controller = connect(adb_path, address, input_methods=input_methods, mumu=mumu)
+    tasker = load_ocr(controller, resource_path) if resource_path is not None else None
+    return ScreenSession(controller, tasker, reader)
 
 
 def connect(adb_path: Path, address: str, *,
@@ -58,6 +105,9 @@ def load_ocr(controller: Controller, resource_path: Path) -> Tasker:
     for name in ("det.onnx", "rec.onnx", "keys.txt"):
         if not (model_dir / name).is_file():
             raise RuntimeError(f"OCR file missing: {model_dir / name}")
+    if resource_path.resolve() == OCR_RESOURCE.resolve() and not all(
+            (model_dir / "digits" / name).is_file() for name in ("det.onnx", "rec.onnx", "keys.txt")):
+        raise RuntimeError("Digit OCR missing. Run: uv run --with onnx python tools/build_digit_ocr.py")
     resource = Resource()
     # Almost every recognition is a small ROI: the auto/DirectML provider costs ~60 ms per call regardless of size, CPU ~15 ms
     # (full-screen OCR is the other way round: 215 ms vs 725 ms). ARK_OCR_EP=auto restores the framework default.
@@ -115,9 +165,7 @@ def main() -> None:
     parser.add_argument("--screen", required=True, help="Sample directory name")
     parser.add_argument("--round", type=int, help="Current round, if visible")
     parser.add_argument("--note", default="", help="Sample annotation")
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
+    add_session_args(parser)
     parser.add_argument("--ocr", action="store_true", help="Print OCR results and runtime")
     args = parser.parse_args()
     if not args.screen or args.screen.endswith((".", " ")) or any(
@@ -127,8 +175,8 @@ def main() -> None:
     log_dir = SAMPLES / "_logs"
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
-        Tasker.set_log_dir(log_dir)
-        controller = connect(args.adb, args.address)
+        controller = session(args.adb, args.address, None, log_dir=log_dir,
+                             save_draw=None, save_on_error=None).controller
         start = perf_counter()
         image = capture(controller)
         capture_ms = (perf_counter() - start) * 1000

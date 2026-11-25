@@ -11,11 +11,11 @@ from maa.tasker import Tasker
 from ..prep_holdings import AREAS
 from ..track import HAND, TEMP, Track
 from .board_read import read_board_tiles
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
+from .capture import add_session_args, session
 from .deploy import read_board
 from .equipment_read import read_equipment_slots
 from .hand import read_hand
-from .read import CATALOG, ROOT, Reader, read_json
+from .read import CATALOG, Reader
 from .shop import set_shop_open
 
 
@@ -166,18 +166,13 @@ def reconcile_holdings(track: Track, scan: dict, *, deploy_cap: int,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--board", type=Path, required=True)
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
+    add_session_args(parser, catalog=CATALOG)
     args = parser.parse_args()
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        reader = Reader(args.catalog, read_json(ROOT / "calib/slots.json"))
-        controller = connect(args.adb, args.address, input_methods=MaaAdbInputMethodEnum.Maatouch)
-        result = scan_holdings(load_ocr(controller, args.ocr_resource), reader, read_board(args.board))
+        screen_session = session(args.adb, args.address, args.ocr_resource,
+                                 input_methods=MaaAdbInputMethodEnum.Maatouch, catalog=args.catalog)
+        tasker, reader = screen_session.tasker, screen_session.reader
+        result = scan_holdings(tasker, reader, read_board(args.board))
         print(json.dumps(result, ensure_ascii=False))
     except (OSError, RuntimeError, ValueError) as error:
         parser.exit(1, f"{error}\n")

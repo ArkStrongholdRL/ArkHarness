@@ -4,10 +4,13 @@ samples/
 !resource/image/stage-m[0-9][0-9]-*.png
 !resource/image/bond-members-icon.png
 !resource/image/bond-ring-left.png
+!resource/image/bond-ring-active-left.png
 !resource/image/drag-sell-icon.png
 !resource/image/enemy-header-icon.png
 !resource/image/facing-cancel.png
 !resource/image/ready-checkbox.png
+!resource/image/shop-card-tier-[1-6].png
+!resource/image/shop-level-[1-6]-*.png
 *.jpg
 __pycache__/
 .venv/
@@ -22,3 +25,54 @@ config/maa_pi_config.json
 !README.md
 !LICENSE.md
 !LICENCE.md
+
+# Python
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code local state
+.claude/settings.local.json
+
+# Misc local artifacts
+*.log
+*.tmp
+*.bak
+*.csv
+!tools/fixtures/**/*.csv
+tmp/
+
+# Tests and fixtures (not published)
+/test/
+tools/test_*.py
+tools/fixtures/
+
+# Benchmarks and one-off debug / recovery scripts (not published)
+tools/bench_*.py
+tools/dbg_*.py
+tools/finish_facing.py
+
+# Parity checks, audits, dumps and other dev-only tools (not published)
+tools/*_parity.*
+tools/check_screenstate.mjs
+tools/pipeline_audit.py
+tools/audit_*.py
+tools/*_dump.mjs
+tools/dump_*.mjs
+tools/dry_prep_chain.py
+tools/paired.py
+tools/bonds_truth.mjs

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 import os
 import re
 import unicodedata
@@ -16,12 +17,18 @@ from maa.tasker import Tasker
 from PIL import Image
 
 from .bounty import SLOTS as BOUNTY_SLOTS, BountyCatalog
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
-from .native import Frame, OfflineController, completed_data
-from .session import task_recognition
+from .capture import add_session_args, session
+from .native import CHECK_NUMBER_BELOW, MIN_NAME_SCORE, MIN_NUMBER_SCORE, Frame, OfflineController, completed_data
+from .names import match_name
+from .session import run as run_task, task_recognition
+from .shop_portraits import encode_portrait, match_portrait, save_portraits
 
 
 ROOT = Path(__file__).resolve().parents[2]
+LOGGER = logging.getLogger(__name__)
+SHOP_TIER_BADGES = {f"Shop.CardTier.{number}": number for number in range(1, 7)}
+SHOP_LEVEL_BADGES = {f"Shop.LevelBadge.{number}": number for number in range(1, 7)}
+SHOP_PORTRAITS = ROOT / "resource/image/portrait"
 CATALOG = Path(os.environ.get("ARK_CATALOG", "E:/ArkHarness-data/act3autochess-v3_1"))
 CONFIG_FIELDS = ("modeId", "difficulty", "lastRound", "bossRound", "hiddenRound")
 MATCH_FIELDS = ("round", "stageId", "bossId", "hiddenBossId", "disabledBonds", "bondChoice", "spRound", "sp")
@@ -33,8 +40,6 @@ CARD_FIELDS = ("idx", "kind", "id", "tier", "coin", "payout", "rounds", "enemyKe
                "soldOut", "team")
 ROMAN = dict(zip(("I", "II", "III", "IV", "V", "VI"), range(1, 7)))
 SHOP_UPGRADE_CENTERS = (63, 225, 387)
-ENEMY_PREVIEW_ALIASES = {"深池方阵战士": "深池方阵步兵"}
-SHOP_CHESS_NAME_ALIASES = {"w": "W", "伊桑·": "伊桑", "罗比拉塔": "罗比菈塔"}
 
 
 def clean(text: str) -> str:
@@ -61,7 +66,8 @@ def shop_reward_choices(slots: list[dict | None], *, min_cards: int = 3,
         return []
     choices = [(index, slot) for index, slot in enumerate(slots) if slot is not None and not slot["sold"]]
     if reward_phase:
-        if any((card["price"] or 0) > 0 for _, card in choices):
+        if any((card["price"] or 0) > 0 or (card["kind"] == kind and card["price"] is None)
+               for _, card in choices):
             return []
         choices = [(index, card) for index, card in choices if card["kind"] == kind and card["price"] == 0]
     if not min_cards <= len(choices) <= 3 or any(card["kind"] != kind or card["price"] != 0
@@ -69,13 +75,6 @@ def shop_reward_choices(slots: list[dict | None], *, min_cards: int = 3,
         return []
     identified = [(index, card) for index, card in choices if card["id"]]
     return identified if len({card["id"] for _, card in identified}) == len(identified) else []
-
-
-def reward_price_badge(frame: Frame, position: dict) -> bool:
-    x, y, width, _ = position["priceROI"]
-    center = x + width // 2
-    blue, green, red = frame.image[y - 9:y + 12, center - 18:center + 18].astype(np.int16).transpose(2, 0, 1)
-    return np.count_nonzero((red >= 125) & (red > green + 12) & (green > blue + 30)) >= 100
 
 
 def shop_confirm_box(frame: Frame, position: dict) -> tuple | None:
@@ -89,10 +88,24 @@ def integer(text: str, pattern: str = r"([0-9]+)") -> int | None:
     return int(match[1]) if match else None
 
 
+def screen_integer(frame: Frame, node: str, pattern: str = r"([0-9]+)", **override) -> int | None:
+    text = frame.text(node, min_score=MIN_NUMBER_SCORE, confirm_below=CHECK_NUMBER_BELOW, **override)
+    if not text and node == "Screen.Funds" and not override and frame.hit("Screen.FundsZero"):
+        text = "0"
+    return integer(text, pattern)
+
+
 def tier(text: str) -> int | None:
     label = clean(unicodedata.normalize("NFKC", text)).upper()
     number = integer(label)
     return number if number in ROMAN.values() else ROMAN.get(label)
+
+
+def shop_card_tier(frame: Frame, roi: list[int]) -> int | None:
+    x, y, width, _ = roi
+    search = [x - 2, y + 2, width + 4, 24]
+    badge = frame.first_hit("Shop.CardTierBadge", overrides={name: {"roi": search} for name in SHOP_TIER_BADGES})
+    return SHOP_TIER_BADGES.get(badge) or tier(frame.text("Screen.ShopCardTier", roi=roi))
 
 
 def shop_upgrade_center(frame: Frame) -> int | None:
@@ -111,6 +124,8 @@ def shop_upgrade_center(frame: Frame) -> int | None:
 
 
 def expanded_shop_level(frame: Frame) -> int | None:
+    if level := SHOP_LEVEL_BADGES.get(frame.first_hit("Shop.LevelBadge")):
+        return level
     center = shop_upgrade_center(frame)
     if center is None:
         return None
@@ -128,11 +143,17 @@ def expanded_shop_level(frame: Frame) -> int | None:
     return level
 
 
-def shop_upgrade_price(frame: Frame) -> int | None:
-    center = shop_upgrade_center(frame)
+def shop_upgrade_price(frame: Frame, *, level: int | None = None) -> int | None:
+    center = (SHOP_UPGRADE_CENTERS[2 if level == 1 else 1 if level <= 3 else 0]
+              if level in ROMAN.values() else shop_upgrade_center(frame))
     if center is None:
         return None
-    return integer(frame.text("Screen.UpgradePrice", roi=[center - 13, 522, 26, 26]))
+    return screen_integer(frame, "Screen.UpgradePrice", roi=[center - 13, 522, 26, 26])
+
+
+def shop_refresh_price(frame: Frame) -> int | None:
+    price = screen_integer(frame, "Screen.RefreshPrice")
+    return 0 if price is None and frame.hit("Shop.FreeRefresh") else price
 
 
 def read_json(path: Path) -> dict:
@@ -145,6 +166,11 @@ def index_names(rows: dict) -> dict:
         if row.get("name"):
             names[clean(row["name"])].append((key, row))
     return names
+
+
+def expected_names(names) -> str:
+    labels = [r"\s*".join(re.escape(c) if c != ":" else "[:：]" for c in name) for name in sorted(names)]
+    return r"^\s*(?:" + "|".join(labels) + r")\s*$" if labels else r"(?!)"
 
 
 def chess_identity(reader: "Reader", frame: Frame) -> dict:
@@ -164,7 +190,12 @@ def normalize_item_description(text: str) -> str:
 
 
 def catalog_identity(reader: "Reader", frame: Frame, node: str, kind: str) -> dict:
-    names = {clean(row.text) for row in frame.rows(node)} - {""}
+    if kind == "chess":
+        rows = frame.rows(node, expected=reader.chess_detail_expected)
+        names = {clean(row.text) for row in rows if row.score >= MIN_NAME_SCORE}
+        names.intersection_update(reader.chess_detail_names)
+    else:
+        names = {clean(row.text) for row in frame.rows(node)} - {""}
     entries = {
         name: [(entity_id, row)
                for entry_kind, entity_id, row in reader.shop_names.get(name, []) if entry_kind == kind]
@@ -206,22 +237,44 @@ def unread_fields(value: Any, path: str = "") -> set[str]:
 
 class Reader:
     stage_hint: str | None = None
+    shop_level_hint: int | None = None
     deploy_cap_floor: int = 0
     reward_kind_hint: str | None = None
 
     def __init__(self, catalog: Path, slots: dict):
         self.slots = slots
+        self.portrait_rois = slots.get("shop", {}).get("portraits", {})
         self.modes = index_names(read_json(catalog / "config.json")["modes"])
         self.stages = read_json(catalog / "stages.json")
         self.bonds = index_names(read_json(catalog / "bonds.json"))
+        self.core_bonds = {name: [(key, row) for key, row in entries if row.get("isCore")]
+                           for name, entries in self.bonds.items() if any(row.get("isCore") for _, row in entries)}
         self.bosses = index_names(read_json(catalog / "bosses.json"))
         self.tokens = index_names(read_json(catalog / "tokens.json"))
         enemies = read_json(catalog / "enemies.json")
         self.enemies = index_names(enemies)
         self.shop_names = {}
+        self.shop_base_names = {"chess": {}, "item": {}}
+        self.shop_by_tier_price = defaultdict(dict)
+        saved_portraits = {path.stem for path in SHOP_PORTRAITS.glob("*.png")} if self.portrait_rois else set()
+        self.shop_portrait_ids = defaultdict(list)
         for kind, file in (("chess", "chess.json"), ("item", "items.json")):
-            for name, entries in index_names(read_json(catalog / file)).items():
+            by_name = index_names(read_json(catalog / file))
+            if kind == "chess":
+                self.chess_detail_names = by_name.keys() | self.tokens.keys()
+                self.chess_detail_expected = expected_names(self.chess_detail_names)
+            for name, entries in by_name.items():
                 self.shop_names.setdefault(name, []).extend((kind, key, row) for key, row in entries)
+                base = [(key, row) for key, row in entries if row.get("isGolden") is not True]
+                if base:
+                    self.shop_base_names[kind][name] = base
+                for key, row in base:
+                    if key in saved_portraits:
+                        self.shop_portrait_ids[kind, row.get("tier")].append(key)
+                    for price in {0, row.get("price")} - {None}:
+                        bucket = self.shop_by_tier_price[kind, row.get("tier"), price]
+                        bucket.setdefault(name, []).append((key, row))
+        self.shop_name_expected = {kind: expected_names(names) for kind, names in self.shop_base_names.items()}
         raw_cards = read_json(catalog / "choices.json")["cards"]
         self.bounties = BountyCatalog(raw_cards.get("bounty", []))
         self.tactics = index_names({row["effectId"]: row for row in raw_cards.get("tactic", [])})
@@ -233,6 +286,9 @@ class Reader:
         rows = self.modes.get(label, [])
         if not rows and (match := re.fullmatch(r".{1,2}(规程等级[0-9]+)", label)):
             rows = self.modes.get(match[1], [])
+        if not rows:
+            # A neighboring regulation number represents a different mode.
+            rows = self.modes.get(match_name(label, self.modes, approximate=not any(map(str.isdigit, label))), [])
         return rows[0][1] if len(rows) == 1 else {}
 
     def read(self, frame: Frame) -> dict:
@@ -253,7 +309,7 @@ class Reader:
             match["stageId"] = self.stage_hint or frame.stage_id()
 
         if scene in ("preparation", "bondDetail", "enemyPreview", "drag"):
-            match["round"] = integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)")
+            match["round"] = screen_integer(frame, "ArkRoundNumber", r"回合([0-9]+)")
             own["lp"] = integer(frame.text("Screen.Life"))
             schedule = mode.get("rounds", {}).get(str(match["round"]))
             if schedule is not None:
@@ -267,11 +323,12 @@ class Reader:
         if scene in ("preparation", "bondDetail"):
             if frame.hit("Screen.ReadyIcon") and frame.hit("Screen.ReadyColor"):
                 own["canReady"] = True
-            own["funds"] = integer(frame.text("Screen.Funds"))
+            own["funds"] = screen_integer(frame, "Screen.Funds")
             expanded = self.read_shop(frame, shop, mode, incomplete)
             if scene == "preparation":
                 self.read_deployment(frame, own, match["stageId"], expanded)
-            own["bonds"] = self.read_bonds(frame, scene)
+            leader = match["round"] is not None and match["round"] in (config["bossRound"], config["hiddenRound"])
+            own["bonds"] = self.read_bonds(frame, scene, leader=leader)
             if own["bonds"] is not None:
                 incomplete.add("self.bonds")
         elif scene == "enemyPreview":
@@ -279,9 +336,11 @@ class Reader:
             current_round = match["round"]
             if current_round is not None and current_round in (config["bossRound"], config["hiddenRound"]):
                 hidden = current_round == config["hiddenRound"]
-                names = {clean(row.text) for row in frame.rows("Screen.LeaderName")}
-                bosses = {key: data for name in names for key, data in self.bosses.get(name, [])
-                          if data.get("hidden") is hidden}
+                names = {clean(row.text) for row in frame.rows("Screen.LeaderName") if row.score >= MIN_NAME_SCORE}
+                leaders = {name: [(key, row) for key, row in candidates if row.get("hidden") is hidden]
+                           for name, candidates in self.bosses.items()
+                           if any(row.get("hidden") is hidden for _, row in candidates)}
+                bosses = {key: data for name in names for key, data in leaders.get(match_name(name, leaders), [])}
                 if len(bosses) == 1:
                     key, boss = bosses.popitem()
                     match["hiddenBossId" if hidden else "bossId"] = key
@@ -291,7 +350,7 @@ class Reader:
             state["equipmentOffers"] = [offer[0] for slot in range(len(BOUNTY_SLOTS))
                                         if (offer := self.equipment_offer(frame, slot))]
         elif scene in ("bountySelection", "tacticSelection"):
-            match["round"] = integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)")
+            match["round"] = screen_integer(frame, "ArkRoundNumber", r"回合([0-9]+)")
             match["spRound"] = True
             kind = "tactic" if scene == "tacticSelection" else "bounty"
             read_offer = self.tactic_offer if kind == "tactic" else self.bounties.offer
@@ -334,16 +393,17 @@ class Reader:
         key, item = items[0]
         return {"idx": slot, "id": key, "name": name, "tier": item.get("tier"), "kind": item.get("kind")}, tuple(rows[0].box)
 
-    def read_bonds(self, frame: Frame, scene: str) -> list[dict] | None:
+    def read_bonds(self, frame: Frame, scene: str, *, leader: bool = False) -> list[dict] | None:
         if scene == "bondDetail":
-            records = [(frame.text("Screen.BondDetailName"),
+            records = [(frame.text("Screen.BondDetailName", min_score=MIN_NAME_SCORE),
                         integer(frame.text("Screen.BondDetailLayers"), r"层数([0-9]+)"),
-                        frame.text("Screen.BondMembers"))]
+                        frame.text("Screen.BondMembers"), False)]
         else:
-            records = [(name, integer(value), "") for name, value, _ in frame.visible_bonds()]
+            records = [(name, integer(value or ""), "", value is None)
+                       for name, value, _ in frame.visible_bonds(leader=leader)]
         bonds = []
-        for name, layers, members in records:
-            entries = self.bonds.get(clean(name), [])
+        for name, layers, members, unverified in records:
+            entries = self.bonds.get(match_name(clean(name), self.bonds), [])
             member = re.match(r"(\d+)/(\d+)(尚未激活|已激活)", clean(members))
             active = member[3] == "已激活" if member else None
             bonds.append({
@@ -353,6 +413,8 @@ class Reader:
                 "tier": 0 if active is False else None,
                 "layers": layers,
             })
+            if unverified and bonds[-1]["bondId"] is not None:
+                bonds[-1]["layerReadFailed"] = True
         return bonds or None
 
     def read_deployment(self, frame: Frame, own: dict, stage_id: str | None, expanded: bool) -> None:
@@ -361,18 +423,20 @@ class Reader:
         if cap is None:
             return
         cap = max(cap, self.deploy_cap_floor)
-        node = "Screen.DeployExpanded" if expanded else "Screen.DeployCollapsed"
-        remaining = integer(frame.text(node), r"剩余可放置角色:([0-9]+)")
+        # The limit is the stage's catalog value, so it does not depend on the remaining-count OCR succeeding.
+        own["deployCap"] = cap
+        remaining = screen_integer(frame, "Screen.DeployExpanded" if expanded else "Screen.DeployCollapsed")
         if remaining is not None and 0 <= remaining <= cap:
-            own["deployCap"] = cap
             own["deployCount"] = cap - remaining
 
     def read_enemy_kinds(self, frame: Frame) -> tuple[list[str], dict[str, list[str]]]:
         kinds = set()
         ambiguous = {}
         for row in frame.rows("Screen.EnemyNames"):
+            if row.score < MIN_NAME_SCORE:
+                continue
             label = clean(row.text).lstrip("•·∙-")
-            label = ENEMY_PREVIEW_ALIASES.get(label, label)
+            label = match_name(label, self.enemies)
             candidates = self.enemies.get(label, [])
             if len(candidates) == 1:
                 kinds.add(candidates[0][0])
@@ -380,31 +444,44 @@ class Reader:
                 ambiguous[label] = sorted(key for key, _ in candidates)
         return sorted(kinds), ambiguous
 
+    @staticmethod
+    def panel_rows(frame: Frame) -> list:
+        """Text rows of a panel. A caller that knows the layout (the briefing page) sets `frame.text_rois` and pays for
+        those areas only; everything else keeps the single full-screen pass."""
+        rois = getattr(frame, "text_rois", None)
+        if not rois:
+            return frame.rows("Screen.FullText")
+        return [row for roi in rois for row in frame.rows("Screen.FullText", roi=roi)]
+
     def read_panels(self, frame: Frame, match: dict, incomplete: set[str]) -> None:
-        rows = frame.rows("Screen.FullText")
+        rows = self.panel_rows(frame)
         briefing = any("确认本局信息" in clean(row.text) for row in rows)
         summary = briefing or any("附加盟约" == clean(row.text) for row in rows)
         if summary:
             for row in rows:
                 x, y, _, _ = row.box
-                candidates = self.bosses.get(clean(row.text), [])
+                if row.score < MIN_NAME_SCORE or not (x >= 920 and 300 <= y <= 430):
+                    continue
+                candidates = self.bosses.get(match_name(clean(row.text), self.bosses), [])
                 ordinary = [key for key, data in candidates if data.get("hidden") is False]
-                if x >= 920 and 300 <= y <= 430 and len(ordinary) == 1:
+                if len(ordinary) == 1:
                     match["bossId"] = ordinary[0]
             detected = []
             enabled = set()
             groups = [[], []]
             for row in rows:
                 x, y, width, _ = row.box
-                candidates = [(key, data) for key, data in self.bonds.get(clean(row.text), [])
-                              if data.get("isCore")]
-                if x >= 890 or not 250 <= y <= 465 or len(candidates) != 1:
+                if row.score < MIN_NAME_SCORE or x >= 890 or not 250 <= y <= 465:
+                    continue
+                candidates = self.core_bonds.get(match_name(clean(row.text), self.core_bonds), [])
+                if len(candidates) != 1:
                     continue
                 key = candidates[0][0]
                 detected.append(key)
                 center = x + width // 2
                 if briefing:
-                    groups[int(center >= 445)].append((y, center, key))
+                    # Row first, then left to right: OCR box heights jitter by a pixel or two within one printed row.
+                    groups[int(center >= 445)].append((0 if y < 360 else 1, center, key))
                 if frame.hit("Screen.EnabledBond", roi=[max(0, center - 29), y - 92, 58, 68]):
                     enabled.add(key)
             if len(set(detected)) == len(detected) == 10:
@@ -435,14 +512,17 @@ class Reader:
 
     def read_shop(self, frame: Frame, shop: dict, mode: dict, incomplete: set[str]) -> bool:
         expanded = frame.hit("Shop.Expanded")
-        shop["level"] = expanded_shop_level(frame) if expanded else tier(frame.text("Screen.ShopLevelCollapsed"))
+        shop["level"] = self.shop_level_hint
+        if shop["level"] is None:
+            shop["level"] = expanded_shop_level(frame) if expanded else tier(frame.text("Screen.ShopLevelCollapsed"))
         shop["maxLevel"] = mode.get("maxShopLevel")
         if not expanded:
             return False
-        if shop["level"] is not None and frame.hit("Shop.ConfirmLevelText"):
-            shop["level"] -= 1
-        shop["upgradePrice"] = shop_upgrade_price(frame)
-        shop["refreshPrice"] = integer(frame.text("Screen.RefreshPrice"))
+        if frame.hit("Shop.ConfirmLevelText"):
+            shop["levelPreview"] = True
+            return True
+        shop["upgradePrice"] = shop_upgrade_price(frame, level=shop["level"])
+        shop["refreshPrice"] = shop_refresh_price(frame)
         shop["frozen"] = shop_frozen(frame)
         reward_phase = shop_reward_phase(frame) is True
         if reward_phase:
@@ -450,7 +530,7 @@ class Reader:
         positions = self.shop_positions(mode, shop["level"])
         if not positions:
             return True
-        output = self.read_shop_slots(frame, positions, reward_kind=self.reward_kind_hint)
+        output = self.read_shop_slots(frame, positions, reward_kind=self.reward_kind_hint, reward_phase=reward_phase)
         if any(value is None for value in output):
             incomplete.add("self.shop.slots")
         shop["slots"] = output
@@ -460,10 +540,12 @@ class Reader:
             shop["rewardOffer"] = {"slots": [card for _, card in choices]}
         return True
 
-    def read_shop_slots(self, frame: Frame, positions: list[dict], *, reward_kind: str | None = None) -> list[dict | None]:
+    def read_shop_slots(self, frame: Frame, positions: list[dict], *, reward_kind: str | None = None,
+                        reward_phase: bool = False) -> list[dict | None]:
         output = [None] * len(positions)
         for position in positions:
-            output[position["engineIndex"]] = self.read_shop_slot(frame, position, reward_kind=reward_kind)
+            output[position["engineIndex"]] = self.read_shop_slot(frame, position, reward_kind=reward_kind,
+                                                                reward_phase=reward_phase)
         return output
 
     def shop_positions(self, mode: dict, level: int | None) -> list[dict]:
@@ -477,30 +559,85 @@ class Reader:
         indices = {row["engineIndex"] for row in positions}
         return positions if indices == set(range(len(positions))) else []
 
-    def read_shop_slot(self, frame: Frame, position: dict, *, reward_kind: str | None = None) -> dict | None:
-        if position.get("soldROI") and frame.hit("Screen.ShopSold", roi=position["soldROI"]):
-            return {"kind": position["kind"], "id": None, "price": None, "sold": True, "frozen": None}
-        name = clean(frame.text("Screen.ShopCardName", roi=position["nameROI"]))
-        price = integer(frame.text("Screen.ShopCardPrice", roi=position["priceROI"]))
+    def portrait_roi(self, position: dict, kind: str) -> list[int]:
+        left, top, width, height = self.portrait_rois[kind]
+        return [position["center"][0] + left, top, width, height]
+
+    def shop_portraits(self, frame: Frame, shop: dict, known: frozenset[str]) -> dict[str, str]:
+        slots = shop.get("slots")
+        if (not slots or frame.scene() != "preparation"
+                or frame.hit("Shop.ConfirmLevelText")):
+            return {}
+        phase = shop_reward_phase(frame)
+        if phase is None or (phase is False and (shop.get("rewardPending") or shop.get("rewardOffer"))):
+            return {}
+        positions = self.shop_positions(self.read_mode(frame), shop["level"])
+        if phase and any(shop_confirm_box(frame, position) for position in positions):
+            return {}
+        portraits = {}
+        for position in positions:
+            card = slots[position["engineIndex"]]
+            if not card or card["sold"] or (key := card["id"]) is None:
+                continue
+            if key in known or key in portraits or (not phase and shop_confirm_box(frame, position)):
+                continue
+            if phase and (card["kind"] != "chess" or card["price"] != 0):
+                continue
+            badge = "Screen.ShopRewardBadge" if phase else "Shop.PortraitLit"
+            if not frame.hit(badge, roi=position["priceROI"]):
+                continue
+            name = clean(frame.text("Screen.ShopCardName", roi=position["nameROI"], min_score=MIN_NAME_SCORE,
+                                    expected=self.shop_name_expected[card["kind"]]))
+            exact = self.shop_base_names.get(card["kind"], {}).get(name, ())
+            if len(exact) == 1 and exact[0][0] == key:
+                if png := encode_portrait(frame.image, self.portrait_roi(position, card["kind"])):
+                    portraits[key] = png
+        return portraits
+
+    def read_shop_slot(self, frame: Frame, position: dict, *, reward_kind: str | None = None,
+                       reward_phase: bool = False) -> dict | None:
         kind = position["kind"]
-        if price == 0 and (kind == "chess" or reward_kind is not None):
-            if not reward_price_badge(frame, position):
-                price = None
-            else:
-                kind = reward_kind or kind
-                if shop_confirm_box(frame, position):
-                    name = catalog_identity(self, frame, "Board.CarriedName", kind)["name"] or name
-        # Prefer the literal label, then recover known OCR errors within the slot kind.
-        fallback = name[:-1] if name.endswith(("。", ".")) else name
-        if kind == "chess":
-            fallback = SHOP_CHESS_NAME_ALIASES.get(fallback, fallback)
-        for label in dict.fromkeys((name, fallback)):
-            candidates = [(key, data) for entry_kind, key, data in self.shop_names.get(label, [])
-                          if entry_kind == kind and data.get("isGolden") is not True]
-            if candidates:
-                break
-        if len({data.get("tier") for _, data in candidates}) > 1:
+        price_roi = position["priceROI"]
+        if reward_phase:
+            price = 0 if frame.hit("Screen.ShopRewardBadge", roi=price_roi) else None
+            if price is None and position.get("soldROI") and frame.hit("Screen.ShopSold", roi=position["soldROI"]):
+                return {"kind": kind, "id": None, "price": None, "sold": True, "frozen": None}
+            if price is None:
+                price = screen_integer(frame, "Screen.ShopCardPrice", roi=price_roi)
+            kind = reward_kind or "chess"
+        else:
+            if position.get("soldROI") and frame.hit("Screen.ShopSold", roi=position["soldROI"]):
+                return {"kind": kind, "id": None, "price": None, "sold": True, "frozen": None}
+            price = screen_integer(frame, "Screen.ShopCardPrice", roi=price_roi)
+            if price == 0 and (kind == "chess" or reward_kind is not None):
+                if frame.hit("Screen.ShopRewardBadge", roi=price_roi):
+                    kind = reward_kind or kind
+                else:
+                    price = None
+        use_portrait = not reward_phase and price != 0 and kind in self.portrait_rois
+        level = None
+        if use_portrait:
+            level = shop_card_tier(frame, position["tierROI"])
+            portraits = self.shop_portrait_ids.get((kind, level), [])
+            if portraits and (key := match_portrait(frame, self.portrait_roi(position, kind), portraits)):
+                return {"kind": kind, "id": key, "price": price, "sold": False, "frozen": None}
+        name = clean(frame.text("Screen.ShopCardName", roi=position["nameROI"], min_score=MIN_NAME_SCORE,
+                                expected=self.shop_name_expected[kind], fallback_unfiltered=True))
+        if use_portrait:
+            LOGGER.warning("Shop portrait miss: screen slot=%s kind=%s tier=%s templates=%d OCR name=%r",
+                           position["screenIndex"], kind, level, len(portraits), name)
+        if price == 0 and (kind == "chess" or reward_kind is not None) and shop_confirm_box(frame, position):
+            name = catalog_identity(self, frame, "Board.CarriedName", kind)["name"] or name
+        names = self.shop_base_names.get(kind, {})
+        candidates = names.get(match_name(name, names, approximate=False), [])
+        fuzzy = not candidates and price is not None and bool(name)
+        if not use_portrait and (fuzzy or len({data.get("tier") for _, data in candidates}) > 1):
             level = tier(frame.text("Screen.ShopCardTier", roi=position["tierROI"]))
+        if fuzzy:
+            if level is not None:
+                constrained = self.shop_by_tier_price.get((kind, level, price), {})
+                candidates = constrained.get(match_name(name, constrained), [])
+        if len({data.get("tier") for _, data in candidates}) > 1:
             if level is None:
                 return None
             candidates = [(key, data) for key, data in candidates if data.get("tier") == level]
@@ -511,28 +648,40 @@ class Reader:
 
 
 class ScreenRecognition(CustomRecognition):
-    def __init__(self, reader: Reader):
+    def __init__(self, reader: Reader, known_portraits: frozenset[str] | None = None):
         super().__init__()
         self.reader = reader
+        self.known_portraits = known_portraits
 
     def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg):
         hit = (0, 0, 1, 1)
         if argv.image.shape != (720, 1280, 3):
             return self.AnalyzeResult(hit, {"error": f"Expected a 1280×720 BGR screenshot, got {argv.image.shape}"})
         try:
-            return self.AnalyzeResult(hit, {"state": self.reader.read(Frame(context, argv.image))})
+            frame = Frame(context, argv.image)
+            state = self.reader.read(frame)
+            result = {"state": state}
+            if self.known_portraits is not None:
+                portraits = self.reader.shop_portraits(frame, state["self"]["shop"], self.known_portraits)
+                if portraits:
+                    result["portraits"] = portraits
+            return self.AnalyzeResult(hit, result)
         except (OSError, RuntimeError, ValueError) as error:
             return self.AnalyzeResult(hit, {"error": str(error)})
 
 
 def read_screen(tasker: Tasker, reader: Reader) -> dict:
-    recognition = ScreenRecognition(reader)
+    known = None
+    if reader.portrait_rois:
+        known = frozenset(path.stem for path in SHOP_PORTRAITS.glob("*.png"))
+    recognition = ScreenRecognition(reader, known)
     with task_recognition(tasker, "ArkReadScreen", recognition):
-        job = tasker.post_task("ReadScreen").wait()
-    detail = job.get()
-    result = completed_data(detail.nodes, "Screen.Read") if detail else None
+        job = run_task(tasker, "ReadScreen")
+    result = completed_data(job.nodes, "Screen.Read")
     if not job.succeeded or result is None or result.get("state") is None:
         raise RuntimeError((result or {}).get("error") or "MaaFramework ReadScreen did not return a ScreenState")
+    if portraits := result.get("portraits"):
+        save_portraits(SHOP_PORTRAITS, portraits)
     return result["state"]
 
 
@@ -541,18 +690,11 @@ def main() -> None:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--png", type=Path, help="Read a saved screenshot without connecting to MuMu")
     source.add_argument("--live", action="store_true", help="Read one screenshot from MuMu in memory")
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
+    add_session_args(parser, catalog=CATALOG)
     args = parser.parse_args()
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        if args.live:
-            controller = connect(args.adb, args.address)
-        else:
+        controller = None
+        if not args.live:
             with Image.open(args.png) as image:
                 if image.size != (1280, 720):
                     raise ValueError(f"Expected 1280×720 PNG, got {image.width}×{image.height}")
@@ -560,8 +702,8 @@ def main() -> None:
             controller = OfflineController(frame)
             if not controller.set_screenshot_use_raw_size(True) or not controller.post_connection().wait().succeeded:
                 raise RuntimeError("Could not initialize offline screenshot controller")
-        tasker = load_ocr(controller, args.ocr_resource)
-        reader = Reader(args.catalog, read_json(ROOT / "calib/slots.json"))
+        screen_session = session(args.adb, args.address, args.ocr_resource, controller=controller, catalog=args.catalog)
+        tasker, reader = screen_session.tasker, screen_session.reader
         print(json.dumps(read_screen(tasker, reader), ensure_ascii=False))
     except (OSError, RuntimeError, ValueError) as error:
         parser.exit(1, f"{error}\n")

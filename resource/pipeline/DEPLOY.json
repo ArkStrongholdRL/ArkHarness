@@ -8,9 +8,13 @@
     "recognition": "Custom",
     "custom_recognition": "ArkDeploy",
     "custom_recognition_param": "close",
-    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
     "max_hit": 1,
-    "next": ["Board.DeployGuard"],
+    "next": [
+      "Board.DeployGuard"
+    ],
     "timeout": 3500
   },
   "Board.DeployGuard": {
@@ -104,7 +108,7 @@
     "roi": [12, 178, 228, 41]
   },
   "Board.OperatorLevel": {
-    "recognition": "OCR", "roi": [110, 216, 50, 32], "only_rec": true, "expected": "^[0-9]+$"
+    "recognition": "OCR", "roi": [110, 216, 50, 32], "only_rec": true, "expected": "^[0-9]+$", "model": "digits"
   },
   "Board.SellText": {
     "recognition": "OCR",

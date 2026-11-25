@@ -16,31 +16,47 @@
     "recognition": "Custom",
     "custom_recognition": "ArkSell",
     "custom_recognition_param": "reset",
-    "action": "Click", "pre_delay": 200, "post_delay": 200,
-    "target": [282, 96],
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "target": [
+      282,
+      96
+    ],
     "max_hit": 1,
-    "next": ["Board.OpenSellDetails"],
+    "next": [
+      "Board.OpenSellDetails"
+    ],
     "timeout": 3000
   },
   "Board.SellCloseShop": {
     "recognition": "Custom",
     "custom_recognition": "ArkSell",
     "custom_recognition_param": "close",
-    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
     "max_hit": 1,
-    "next": ["Board.OpenSellDetails"],
+    "next": [
+      "Board.OpenSellDetails"
+    ],
     "timeout": 3500
   },
   "Board.OpenSellDetails": {
     "recognition": "Custom",
     "custom_recognition": "ArkSell",
     "custom_recognition_param": "pick",
-    "action": "Click", "pre_delay": 200,
+    "action": "Click",
+    "pre_delay": 200,
     "max_hit": 1,
     "post_delay": 400,
-    "next": ["Board.ClickSell"],
+    "next": [
+      "Board.ClickSell"
+    ],
     "timeout": 4000,
-    "on_error": ["Board.CancelSellDetails"]
+    "on_error": [
+      "Board.CancelSellDetails"
+    ]
   },
   "Board.CancelSellDetails": {
     "recognition": "Custom", "custom_recognition": "ArkSell", "custom_recognition_param": "reset",
@@ -50,9 +66,13 @@
     "recognition": "Custom",
     "custom_recognition": "ArkSell",
     "custom_recognition_param": "quote",
-    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
     "max_hit": 1,
-    "next": ["Board.SellVerified"],
+    "next": [
+      "Board.SellVerified"
+    ],
     "timeout": 5500
   },
   "Board.SellVerified": {

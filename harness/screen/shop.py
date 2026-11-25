@@ -9,12 +9,12 @@ from maa.context import Context
 from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
+from .capture import add_session_args, session
 from .native import Frame, completed_data
-from .session import task_recognition
+from .session import run as run_task, task_recognition
 from .read import (
-    CATALOG, ROOT, Reader, clean, expanded_shop_level, integer, read_json, shop_frozen,
-    shop_confirm_box, shop_reward_choices, shop_reward_phase, shop_upgrade_center, shop_upgrade_price,
+    CATALOG, ROOT, Reader, clean, expanded_shop_level, read_json, screen_integer, shop_frozen,
+    shop_confirm_box, shop_refresh_price, shop_reward_choices, shop_reward_phase, shop_upgrade_center, shop_upgrade_price,
 )
 
 
@@ -32,12 +32,12 @@ def receipt(result: dict) -> CustomRecognition.AnalyzeResult:
     return CustomRecognition.AnalyzeResult((0, 0, 1, 1), {"receipt": result})
 
 
-def shop_status(frame: Frame) -> tuple[int, int, int] | None:
+def shop_status(frame: Frame, known_level: int | None = None) -> tuple[int, int, int] | None:
     if not frame.hit("ArkRestText") or not frame.hit("Shop.Expanded"):
         return None
-    current_round = integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)")
-    level = expanded_shop_level(frame)
-    funds = integer(frame.text("Screen.Funds"))
+    current_round = screen_integer(frame, "ArkRoundNumber", r"回合([0-9]+)")
+    level = known_level if known_level is not None else expanded_shop_level(frame)
+    funds = screen_integer(frame, "Screen.Funds")
     if current_round is None or level is None or funds is None:
         return None
     return current_round, level, funds
@@ -52,19 +52,18 @@ class ShopViewRecognition(CustomRecognition):
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
+        kind = json.loads(argv.custom_recognition_param)
+        if kind == "preparation":
+            return (0, 0, 1, 1) if frame.scene() == "preparation" else None
         if frame.scene() != "preparation" or not frame.hit("ArkRestText"):
             return None
-        kind = json.loads(argv.custom_recognition_param)
-        details = frame.hit("Screen.OperatorDetails") or frame.hit("Withdraw.Icon") or frame.hit("HandSale.Button")
-        if kind == "dismissDetails":
-            return (0, 0, 1, 1) if details or frame.hit("Shop.ConfirmLevelText") else None
-        if details or frame.hit("Shop.ConfirmLevelText"):
+        if frame.hit("Shop.DismissibleDetails"):
             return None
         expanded = frame.hit("Shop.Expanded")
         label = "Shop.CollapseText" if expanded else "Shop.ExpandText"
         buttons = frame.rows(label)
-        current_round = integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)")
-        funds = integer(frame.text("Screen.Funds"))
+        current_round = screen_integer(frame, "ArkRoundNumber", r"回合([0-9]+)")
+        funds = screen_integer(frame, "Screen.Funds")
         if current_round is None or funds is None or len(buttons) != 1:
             return None
         state = {"round": current_round, "funds": funds, "expanded": expanded}
@@ -87,9 +86,8 @@ def set_shop_open(tasker: Tasker, expanded: bool) -> dict:
         raise ValueError("The desired expanded state must be a boolean")
     recognition = ShopViewRecognition(expanded)
     with task_recognition(tasker, "ArkShopView", recognition):
-        job = tasker.post_task("Shop.SetView").wait()
-    detail = job.get()
-    result = completed_data(detail.nodes, "Shop.ViewVerified") if detail else None
+        job = run_task(tasker, "Shop.SetView")
+    result = completed_data(job.nodes, "Shop.ViewVerified")
     if not job.succeeded or result is None:
         raise RuntimeError("The requested shop view could not be verified")
     return result["receipt"]
@@ -112,7 +110,7 @@ class BuyRecognition(CustomRecognition):
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
-        status = shop_status(frame)
+        status = shop_status(frame, self.reader.shop_level_hint)
         if status is None:
             return None
         if frame.hit("Shop.ConfirmLevelText"):
@@ -128,7 +126,8 @@ class BuyRecognition(CustomRecognition):
         return self.verify(frame, *status, purchase) if kind == "verify" and purchase is not None else None
 
     def target(self, frame: Frame, current_round: int, level: int, funds: int, *,
-               pending: bool = False, quote: bool = False) -> CustomRecognition.AnalyzeResult | None:
+               pending: bool = False, quote: bool = False,
+               card: dict | None = None) -> CustomRecognition.AnalyzeResult | None:
         mode = self.reader.read_mode(frame)
         positions = self.reader.shop_positions(mode, level)
         position = next((row for row in positions if row["engineIndex"] == self.slot), None)
@@ -143,9 +142,10 @@ class BuyRecognition(CustomRecognition):
                 return reject(f"Engine slot {self.slot} already has an unrelated purchase confirmation")
             x, y = position["center"]
             box = (x, y, 1, 1)
-        card = self.reader.read_shop_slot(frame, position, reward_kind=self.reward_kind)
+        if card is None:
+            card = self.reader.read_shop_slot(frame, position, reward_kind=self.reward_kind)
         if pending and card is None:
-            price = integer(frame.text("Screen.ShopCardPrice", roi=position["priceROI"]))
+            price = screen_integer(frame, "Screen.ShopCardPrice", roi=position["priceROI"])
             card = {"kind": position["kind"], "id": None, "price": price, "sold": False}
         if not card or card["sold"] or card["price"] is None:
             return reject(f"An available card and price were not verified in engine slot {self.slot}")
@@ -176,8 +176,8 @@ class BuyRecognition(CustomRecognition):
                           f"expected {purchase['round']}, {purchase['shopLevel']}, {purchase['fundsBefore']}")
         position = prior["position"]
         confirmation = shop_confirm_box(frame, position)
-        if confirmation is not None and self.expected_price is not None:
-            price = integer(frame.text("Screen.ShopCardPrice", roi=position["priceROI"]))
+        if confirmation is not None and self.expected_price is not None and self.reward_kind is None:
+            price = screen_integer(frame, "Screen.ShopCardPrice", roi=position["priceROI"])
             if price != self.expected_price:
                 return reject(f"The confirmation price was {price}, expected {self.expected_price}")
         return self.AnalyzeResult(confirmation, prior) if confirmation is not None else None
@@ -191,10 +191,12 @@ class BuyRecognition(CustomRecognition):
         if funds != purchase["fundsBefore"] - purchase["price"]:
             return reject(f"Post-click check read funds={funds}, sold={sold}")
         if self.merge or not sold:
-            positions = self.reader.shop_positions(self.reader.read_mode(frame), level)
-            if (shop_reward_phase(frame) is True
-                    or shop_reward_choices(self.reader.read_shop_slots(frame, positions))):
+            if shop_reward_phase(frame) is True:
                 return receipt({**purchase, "fundsAfter": funds, "sold": sold, "rewardOpened": True})
+            if self.merge or purchase["price"] == 0:
+                positions = self.reader.shop_positions(self.reader.read_mode(frame), level)
+                if shop_reward_choices(self.reader.read_shop_slots(frame, positions)):
+                    return receipt({**purchase, "fundsAfter": funds, "sold": sold, "rewardOpened": True})
         if not sold:
             if purchase["price"] > 0:
                 # The funds dropped by exactly the price in the same round and shop level: the click bought it, whether or
@@ -212,13 +214,13 @@ class RewardRecognition(BuyRecognition):
     def target(self, frame: Frame, current_round: int, level: int, funds: int, *,
                pending: bool = False, quote: bool = False) -> CustomRecognition.AnalyzeResult | None:
         positions = self.reader.shop_positions(self.reader.read_mode(frame), level)
-        slots = self.reader.read_shop_slots(frame, positions, reward_kind=self.reward_kind)
         reward_phase = shop_reward_phase(frame) is True
+        slots = self.reader.read_shop_slots(frame, positions, reward_kind=self.reward_kind, reward_phase=reward_phase)
         choices = shop_reward_choices(slots, min_cards=1, kind=self.reward_kind or "chess", reward_phase=reward_phase)
         offer = {str(index): card["id"] for index, card in choices}
         if offer.get(str(self.slot)) != self.expected_id:
             return reject("The requested free reward was not visible")
-        result = super().target(frame, current_round, level, funds, pending=pending, quote=quote)
+        result = super().target(frame, current_round, level, funds, pending=pending, quote=quote, card=slots[self.slot])
         if result is not None:
             result.detail["offer"] = offer
             result.detail["rewardPhase"] = reward_phase
@@ -243,7 +245,7 @@ class RewardRecognition(BuyRecognition):
         if phase is False and prior["rewardPhase"]:
             return receipt({**purchase, "fundsAfter": funds, "rewardClaimed": True})
         positions = self.reader.shop_positions(self.reader.read_mode(frame), level)
-        slots = self.reader.read_shop_slots(frame, positions, reward_kind=self.reward_kind)
+        slots = self.reader.read_shop_slots(frame, positions, reward_kind=self.reward_kind, reward_phase=phase is True)
         paid_shop = (phase is not True
                      and sum(bool(card and card["id"] and (card["price"] or 0) > 0) for card in slots) >= 2)
         choices = shop_reward_choices(slots, min_cards=1, kind=self.reward_kind or "chess", reward_phase=phase is True)
@@ -287,9 +289,8 @@ def run_purchase(tasker: Tasker, reader: Reader, slot: int, *, entry: str,
     recognition = recognizer(reader, slot, expected_id, expected_price, expected_round,
                              merge=merge, reward_kind=reward_kind)
     with task_recognition(tasker, "ArkShopBuy", recognition):
-        job = tasker.post_task(entry).wait()
-    detail = job.get()
-    nodes = detail.nodes if detail else []
+        job = run_task(tasker, entry)
+    nodes = job.nodes
     terminal = "Shop.Quoted" if entry == "Shop.Quote" else "Shop.BuyVerified"
     result = completed_data(nodes, terminal)
     if job.succeeded and result is not None:
@@ -326,7 +327,10 @@ class ShopControlRecognition(CustomRecognition):
                 or (kind == "confirm_level" and self.action != "level")):
             return None
         frame = Frame(context, argv.image)
-        status = shop_status(frame)
+        if kind == "confirm_level" and not frame.hit("Shop.ConfirmLevelText"):
+            return None
+        known_level = self.reader.shop_level_hint if self.action != "level" or kind == "target" else None
+        status = shop_status(frame, known_level)
         if status is None:
             return None
         if self.action != "level" and frame.hit("Shop.ConfirmLevelText"):
@@ -357,7 +361,7 @@ class ShopControlRecognition(CustomRecognition):
             if state["frozen"] is None or state["frozen"] == self.frozen:
                 return None
         else:
-            price = shop_upgrade_price(frame) if self.action == "level" else integer(frame.text("Screen.RefreshPrice"))
+            price = shop_upgrade_price(frame) if self.action == "level" else shop_refresh_price(frame)
             if price is None or price > state["funds"]:
                 return reject(f"The {self.action} price was unreadable or exceeded the available funds")
             if self.action == "refresh" and price == 0:
@@ -372,12 +376,15 @@ class ShopControlRecognition(CustomRecognition):
         if price is None or price > state["funds"]:
             return reject("The upgrade preview level, price or balance was not verified")
         if prior is None:
-            center = shop_upgrade_center(frame)
-            displayed = state["level"]
-            if center is None or displayed < 2 and center < 340:
-                return reject("The previous shop level could not be recovered from the upgrade preview")
-            # Level I still occupies the rightmost upgrade position until confirmation.
-            prior = {"before": {**state, "level": 1 if center >= 340 else displayed - 1}, "price": price}
+            previous = self.reader.shop_level_hint
+            if previous is None:
+                center = shop_upgrade_center(frame)
+                displayed = state["level"]
+                if center is None or displayed < 2 and center < 340:
+                    return reject("The previous shop level could not be recovered from the upgrade preview")
+                # Level I still occupies the rightmost upgrade position until confirmation.
+                previous = 1 if center >= 340 else displayed - 1
+            prior = {"before": {**state, "level": previous}, "price": price}
         before = prior["before"]
         if ((state["round"], state["funds"], price) != (before["round"], before["funds"], prior["price"])
                 or state["level"] not in (before["level"], before["level"] + 1)):
@@ -397,7 +404,7 @@ class ShopControlRecognition(CustomRecognition):
             return reject("The freeze button did not show the requested state")
         if self.action == "refresh" and price == 0:
             state["offers"] = self.offers(frame)
-            price_after = integer(frame.text("Screen.RefreshPrice"))
+            price_after = shop_refresh_price(frame)
             offer_changed = bool(before["offers"] and set(state["offers"]).difference(before["offers"]))
             if not price_after and not offer_changed:
                 return reject("A free refresh did not show a price or offer change")
@@ -409,9 +416,8 @@ def change_shop(tasker: Tasker, reader: Reader, action: str, *, frozen: bool | N
         raise ValueError("Specify a shop action and an explicit desired freeze state for freeze")
     recognition = ShopControlRecognition(reader, action, frozen)
     with task_recognition(tasker, "ArkShopControl", recognition):
-        job = tasker.post_task("Shop.Change").wait()
-    detail = job.get()
-    nodes = detail.nodes if detail else []
+        job = run_task(tasker, "Shop.Change")
+    nodes = job.nodes
     result = completed_data(nodes, "Shop.AlreadySet", "Shop.ControlVerified")
     if job.succeeded and result is not None:
         return result["receipt"]
@@ -432,10 +438,7 @@ def main() -> None:
     parser.add_argument("--expected-price", type=int)
     parser.add_argument("--expected-round", type=int)
     parser.add_argument("--state", choices=("on", "off"), help="Desired state for freeze")
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
+    add_session_args(parser, catalog=CATALOG)
     args = parser.parse_args()
     if (args.action in {"buy", "quote"}) != (args.slot is not None):
         parser.error("--slot is required for buy or quote")
@@ -445,12 +448,8 @@ def main() -> None:
     if (args.action == "freeze") != (args.state is not None):
         parser.error("--state on|off is required for freeze")
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        slots = read_json(ROOT / "calib/slots.json")
-        reader = Reader(args.catalog, slots)
-        tasker = load_ocr(connect(args.adb, args.address), args.ocr_resource)
+        screen_session = session(args.adb, args.address, args.ocr_resource, catalog=args.catalog)
+        tasker, reader = screen_session.tasker, screen_session.reader
         if args.action == "buy":
             result = buy_slot(tasker, reader, args.slot, expected_id=args.expected_id,
                               expected_price=args.expected_price, expected_round=args.expected_round)

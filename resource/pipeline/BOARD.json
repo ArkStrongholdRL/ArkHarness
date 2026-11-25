@@ -112,12 +112,27 @@
   },
   "Screen.DeployExpanded": {
     "recognition": "OCR",
-    "roi": [1094, 376, 186, 31],
-    "expected": "剩余可放置角色"
+    "roi": [1248, 377, 27, 27],
+    "expected": "^[0-9]+$",
+    "only_rec": true,
+    "model": "digits",
+    "color_filter": "OCR.LightText"
   },
   "Screen.DeployCollapsed": {
     "recognition": "OCR",
-    "roi": [1094, 452, 186, 31],
-    "expected": "剩余可放置角色"
-  }
+    "roi": [1248, 453, 27, 27],
+    "expected": "^[0-9]+$",
+    "only_rec": true,
+    "model": "digits",
+    "color_filter": "OCR.LightText"
+  },
+  "Screen.StageM10Normal": {"recognition": "And", "all_of": [{"recognition": "TemplateMatch", "template": "stage-m10-normal-a.png", "roi": [594, 116, 174, 80], "threshold": 0.9}]},
+  "Screen.StageM10Expanded": {"recognition": "And", "all_of": [{"recognition": "TemplateMatch", "template": "stage-m10-expanded-a.png", "roi": [342, 176, 174, 80], "threshold": 0.9}]},
+  "Screen.StageM10": {"recognition": "Or", "any_of": ["Screen.StageM10Expanded", "Screen.StageM10Normal"]},
+  "Screen.StageM03Normal": {"recognition": "And", "all_of": [{"recognition": "TemplateMatch", "template": "stage-m03-normal-a.png", "roi": [738, 260, 174, 80], "threshold": 0.9}]},
+  "Screen.StageM03Expanded": {"recognition": "And", "all_of": [{"recognition": "TemplateMatch", "template": "stage-m03-expanded-a.png", "roi": [690, 188, 184, 88], "threshold": 0.9}, {"recognition": "TemplateMatch", "template": "stage-m03-expanded-b.png", "roi": [414, 248, 174, 80], "threshold": 0.9}]},
+  "Screen.StageM03": {"recognition": "Or", "any_of": ["Screen.StageM03Expanded", "Screen.StageM03Normal"]},
+  "Screen.StageM11Normal": {"recognition": "And", "all_of": [{"recognition": "TemplateMatch", "template": "stage-m11-normal-a.png", "roi": [786, 236, 174, 80], "threshold": 0.9}, {"recognition": "TemplateMatch", "template": "stage-m11-normal-b.png", "roi": [582, 260, 174, 80], "threshold": 0.9}]},
+  "Screen.StageM11Expanded": {"recognition": "And", "all_of": [{"recognition": "TemplateMatch", "template": "stage-m11-expanded-a.png", "roi": [546, 236, 184, 88], "threshold": 0.9}, {"recognition": "TemplateMatch", "template": "stage-m11-expanded-b.png", "roi": [318, 260, 174, 80], "threshold": 0.9}]},
+  "Screen.StageM11": {"recognition": "Or", "any_of": ["Screen.StageM11Expanded", "Screen.StageM11Normal"]}
 }

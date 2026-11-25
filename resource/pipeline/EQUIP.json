@@ -7,8 +7,21 @@
     "next": ["Equip.Pick", "Equip.OpenShop"], "timeout": 3500
   },
   "Equip.OpenShop": {
-    "recognition": "And", "all_of": ["ArkRestText", "Equip.Before", "Shop.ExpandText"],
-    "box_index": 2, "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1, "next": ["Equip.Pick"], "timeout": 3500
+    "recognition": "And",
+    "all_of": [
+      "ArkRestText",
+      "Equip.Before",
+      "Shop.ExpandText"
+    ],
+    "box_index": 2,
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
+    "max_hit": 1,
+    "next": [
+      "Equip.Pick"
+    ],
+    "timeout": 3500
   },
   "Equip.Pick": {
     "recognition": "And",

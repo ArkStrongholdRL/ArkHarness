@@ -8,9 +8,9 @@ from time import sleep
 import numpy as np
 from PIL import Image, ImageDraw
 
-from .capture import ADB_ADDRESS, ADB_PATH, MUMU_PATH, OCR_RESOURCE, SAMPLES, capture, connect, load_ocr, save_sample
+from .capture import MUMU_PATH, SAMPLES, add_session_args, capture, save_sample, session
 from .deploy import deployment_tiles, read_board, tile_point
-from .read import CATALOG, ROOT, Reader, read_json, read_screen
+from .read import CATALOG, ROOT, read_json, read_screen
 
 
 def project(matrix: np.ndarray, grid: np.ndarray) -> np.ndarray:
@@ -92,7 +92,6 @@ def overlay(view: dict, slots: dict, output: Path, *, board: dict | None = None,
 def capture_leader_drag(adb: Path, address: str, board: dict, catalog: Path, slot: int) -> dict:
     """Lift a named hand operator, capture the highlighted board, then return it to the same slot."""
     from maa.define import MaaAdbInputMethodEnum
-    from maa.tasker import Tasker
 
     from .flow import execute
     from .hand import read_hand
@@ -103,12 +102,9 @@ def capture_leader_drag(adb: Path, address: str, board: dict, catalog: Path, slo
     slots = read_json(ROOT / "calib/slots.json")
     if not 0 <= slot < slots["hand"]["capacity"]:
         raise ValueError("Expected a valid zero-based hand slot")
-    Tasker.set_log_dir(SAMPLES / "_logs")
-    Tasker.set_save_draw(False)
-    Tasker.set_save_on_error(False)
-    controller = connect(adb, address, mumu=MUMU_PATH, input_methods=MaaAdbInputMethodEnum.Maatouch)
-    tasker = load_ocr(controller, OCR_RESOURCE)
-    reader = Reader(catalog, slots)
+    screen = session(adb, address, mumu=MUMU_PATH, input_methods=MaaAdbInputMethodEnum.Maatouch,
+                     catalog=catalog, slots=slots)
+    controller, tasker, reader = screen.controller, screen.tasker, screen.reader
     reader.stage_hint = board["stageId"]
     before = read_screen(tasker, reader)
     round_number = before["match"]["round"]
@@ -149,11 +145,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--board", type=Path, default=ROOT / "calib/board.json")
     parser.add_argument("--view", default="shopExpanded")
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
+    add_session_args(parser, catalog=CATALOG, ocr=False)
     parser.add_argument("--capture-leader-drag", type=int, metavar="HAND_SLOT",
                         help="capture a leader drag from a zero-based hand slot and cancel the drag")
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--overlay", type=Path, default=SAMPLES / "_calib_overlay.png")
     args = parser.parse_args()

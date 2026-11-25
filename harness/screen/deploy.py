@@ -9,10 +9,10 @@ from maa.custom_recognition import CustomRecognition
 from maa.define import MaaAdbInputMethodEnum
 from maa.tasker import Tasker
 
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
-from .native import Frame
-from .read import CATALOG, ROOT, clean, integer, read_json
-from .session import task_recognition
+from .capture import add_session_args, session
+from .native import Frame, completed_data
+from .read import CATALOG, ROOT, clean, integer, read_json, screen_integer
+from .session import run as run_task, task_recognition
 
 
 FACING_OFFSETS = {"UP": (0, -182), "RIGHT": (182, 0), "DOWN": (0, 182), "LEFT": (-182, 0)}
@@ -88,12 +88,9 @@ class DeployRecognition(CustomRecognition):
         self.expected_round = expected_round
         self.stage_confirmed = stage_confirmed
         self.summon = summon
-        self.round = None
-        self.remaining = None
-        self.result = None
         self.reason = "The calibrated preparation view was not recognized"
 
-    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> tuple | None:
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | tuple | None:
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
@@ -108,7 +105,8 @@ class DeployRecognition(CustomRecognition):
                 return x, y, 1, 1
             self.reason = "The direction picker for the requested tile and operator was not recognized"
             return None
-        return self.preparation(frame, kind)
+        before = completed_data(argv.task_detail.nodes, "Board.DeployGuard") if kind == "verify" else None
+        return self.preparation(frame, kind, before)
 
     def facing_picker_open(self, frame: Frame) -> bool:
         x, y = self.target
@@ -124,7 +122,8 @@ class DeployRecognition(CustomRecognition):
         x, y = self.target
         return x, y, 1, 1
 
-    def preparation(self, frame: Frame, kind: str) -> tuple | None:
+    def preparation(self, frame: Frame, kind: str,
+                    before: dict | None) -> CustomRecognition.AnalyzeResult | tuple | None:
         if kind == "verify" and self.facing_picker_open(frame):
             self.reason = "The direction picker is still open"
             return None
@@ -143,7 +142,7 @@ class DeployRecognition(CustomRecognition):
             self.reason = "The normal board view was not recovered after closing the shop"
             return None
         current_round = integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)")
-        remaining = integer(frame.text("Screen.DeployCollapsed"), r"剩余可放置角色:([0-9]+)")
+        remaining = screen_integer(frame, "Screen.DeployCollapsed")
         if current_round is None or remaining is None:
             self.reason = "The round or remaining deployment capacity could not be read"
             return None
@@ -152,15 +151,14 @@ class DeployRecognition(CustomRecognition):
             return None
         if kind == "verify":
             delta = 0 if self.from_board or self.summon else 1
-            if self.remaining is None or current_round != self.round or self.remaining - remaining != delta:
+            if before is None or current_round != before["round"] or before["remaining"] - remaining != delta:
                 self.reason = f"After release, round={current_round}, remaining capacity={remaining}"
                 return None
             if not self.stage_confirmed and not self.summon and not matches_facing(frame, self.normal_target, self.facing):
                 self.reason = "The direction was not set in the requested tile's picker"
                 return None
-            self.result = {"round": current_round, "remainingBefore": self.remaining,
-                           "remainingAfter": remaining, "facing": self.facing}
-            return (0, 0, 1, 1)
+            return self.AnalyzeResult((0, 0, 1, 1), {"round": current_round, "remainingBefore": before["remaining"],
+                                                    "remainingAfter": remaining, "facing": self.facing})
         if kind != "pick":
             return None
         if not self.from_board and not self.summon and remaining <= 0:
@@ -169,9 +167,8 @@ class DeployRecognition(CustomRecognition):
         if not self.stage_confirmed and has_facing_marker(frame, self.normal_target):
             self.reason = "The destination tile is already occupied"
             return None
-        self.round, self.remaining = current_round, remaining
         x, y = self.source
-        return x, y, 1, 1
+        return self.AnalyzeResult((x, y, 1, 1), {"round": current_round, "remaining": remaining})
 
 
 def facing_override(target: tuple[int, int], facing: str) -> dict:
@@ -223,21 +220,20 @@ def place_operator(tasker: Tasker, board: dict, stages: dict, source: tuple[int,
                                     from_board=from_board, expected_round=expected_round,
                                     stage_confirmed=stage_confirmed, summon=summon)
     with task_recognition(tasker, "ArkDeploy", recognition):
-        job = tasker.post_task("Board.Deploy", {
+        job = run_task(tasker, "Board.Deploy", {
             "Board.PickHand": {"target": [source_x, source_y]},
             "Board.LiftHand": {"target": [source_x, source_y - 80]},
             "Board.CancelMove": {"target": [35, 675] if from_board else [source_x, source_y]},
             "Board.MoveToTile": {"target": [x, y]},
             "Board.ChooseFacing": direction,
             "Board.PlacementWithoutSwipe": {"enabled": summon or not stage_confirmed},
-        }).wait()
-        detail = job.get()
-        nodes = detail.nodes if detail else []
-    names = [node.name for node in nodes]
-    swipes = completed_facing_swipes(nodes)
-    if (job.succeeded and names and names[-1] in PLACEMENT_TERMINALS
-            and recognition.result and (swipes or summon or not stage_confirmed)):
-        receipt = {**recognition.result, "facingSwipes": swipes}
+        })
+    names = job.names
+    swipes = completed_facing_swipes(job.nodes)
+    result = completed_data(job.nodes, *PLACEMENT_TERMINALS)
+    if (job.finished(*PLACEMENT_TERMINALS)
+            and result is not None and (swipes or summon or not stage_confirmed)):
+        receipt = {**result, "facingSwipes": swipes}
         if summon and not swipes:
             receipt["facing"] = None
         return {"name": name, "stageId": stage, "row": row, "col": col, **receipt}
@@ -284,21 +280,15 @@ def main() -> None:
     parser.add_argument("--row", required=True, type=int, help="Engine tile row")
     parser.add_argument("--col", required=True, type=int, help="Engine tile column")
     parser.add_argument("--facing", required=True, choices=FACING_OFFSETS)
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
+    add_session_args(parser, catalog=CATALOG)
     parser.add_argument("--board", type=Path, default=ROOT / "calib/board.json",
                         help="Calibration file for the current map")
     args = parser.parse_args()
     if (args.from_row is None) != (args.from_col is None):
         parser.error("Use --from-row and --from-col together")
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        tasker = load_ocr(connect(args.adb, args.address, input_methods=MaaAdbInputMethodEnum.Maatouch),
-                          args.ocr_resource)
+        tasker = session(args.adb, args.address, args.ocr_resource,
+                                 input_methods=MaaAdbInputMethodEnum.Maatouch).tasker
         board = read_board(args.board)
         stages = read_json(args.catalog / "stages.json")
         if args.hand_slot is not None:

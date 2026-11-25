@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 from base64 import b64decode, b64encode
+from collections.abc import Collection
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
@@ -14,10 +15,11 @@ from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 from PIL import Image
 
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
-from .native import Frame, completed_data
-from .session import task_recognition
-from .read import ROOT, clean, read_json
+from .capture import OCR_RESOURCE, add_session_args, session
+from .native import MIN_NAME_SCORE, Frame, completed_data
+from .names import match_name
+from .session import run as run_task, task_recognition
+from .read import CATALOG, ROOT, clean, index_names, read_json
 
 
 ENTRIES = {
@@ -30,12 +32,13 @@ PORTRAIT_RADIUS = 40
 
 class CommanderRecognition(CustomRecognition):
     def __init__(self, layouts: dict, slot: tuple[int, int] | None = None, *,
-                 template: str | None = None, capture_portrait: bool = False):
+                 templates: dict[str, str] | None = None, capture_portrait: bool = False, names: Collection[str] = ()):
         super().__init__()
         self.layouts = layouts
         self.slot = slot
-        self.template = template
+        self.templates = templates or {}
         self.capture_portrait = capture_portrait
+        self.names = names
 
     def grid(self, frame: Frame, has_confirm: bool) -> dict | None:
         detail = frame.hit("Commander.GridWithDetail")
@@ -44,25 +47,27 @@ class CommanderRecognition(CustomRecognition):
             return self.layouts["gridWithDetail" if detail else "gridPlain"]
         return None
 
-    def match_portrait(self, frame: Frame, grid: dict) -> tuple[int, int] | None:
+    def match_portraits(self, frame: Frame, grid: dict) -> dict:
         columns, rows = grid["columns"], grid["rows"]
         tolerance = 20
         padding = PORTRAIT_RADIUS + tolerance
         roi = [columns[0] - padding, rows[0] - padding,
                columns[-1] - columns[0] + 2 * padding, rows[-1] - rows[0] + 2 * padding]
         roi[3] = min(roi[3], frame.image.shape[0] - roi[1])
-        result = frame.node("Commander.Portrait", template=self.template, roi=roi)
-        if result is None:
-            return None
-        slots = set()
-        for match in result.filtered_results:
-            x, y, width, height = match.box
-            cx, cy = x + width / 2, y + height / 2
-            column = next((i for i, center in enumerate(columns, 1) if abs(cx - center) <= tolerance), None)
-            row = next((i for i, center in enumerate(rows, 1) if abs(cy - center) <= tolerance), None)
-            if row is not None and column is not None:
-                slots.add((row, column))
-        return slots.pop() if len(slots) == 1 else None
+        matched = {}
+        for name, template in self.templates.items():
+            result = frame.node("Commander.Portrait", template=template, roi=roi)
+            slots = set()
+            for match in result.filtered_results if result is not None else ():
+                x, y, width, height = match.box
+                cx, cy = x + width / 2, y + height / 2
+                column = next((i for i, center in enumerate(columns, 1) if abs(cx - center) <= tolerance), None)
+                row = next((i for i, center in enumerate(rows, 1) if abs(cy - center) <= tolerance), None)
+                if row is not None and column is not None:
+                    slots.add((row, column))
+            if len(slots) == 1:
+                matched[name] = slots.pop()
+        return matched
 
     def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | tuple | None:
         if argv.image.shape != (720, 1280, 3):
@@ -70,12 +75,15 @@ class CommanderRecognition(CustomRecognition):
         frame = Frame(context, argv.image)
         kind = json.loads(argv.custom_recognition_param)
         has_confirm = frame.hit("Commander.ConfirmText")
-        name = clean(frame.text("Commander.SelectedName")) if has_confirm else ""
+        observed = clean(frame.text("Commander.SelectedName", min_score=MIN_NAME_SCORE)) if has_confirm else ""
+        name = match_name(observed, self.names) if self.names else observed
         if kind == "snapshot":
             result = {"snapshot": {"screen": "strategySelection", "commander": name or None,
                                    "canConfirm": bool(has_confirm and name)}}
-            if self.template and (grid := self.grid(frame, has_confirm)):
-                result["matchedSlot"] = self.match_portrait(frame, grid)
+            if name and name == observed:
+                result["exactName"] = name
+            if self.templates and (grid := self.grid(frame, has_confirm)):
+                result["matchedSlots"] = self.match_portraits(frame, grid)
             return self.AnalyzeResult((0, 0, 1, 1), result)
         if self.slot is None:
             return None
@@ -107,12 +115,12 @@ class CommanderRecognition(CustomRecognition):
 
 
 def run(tasker: Tasker, action: str, layouts: dict, slot: tuple[int, int] | None = None,
-        expected_name: str | None = None) -> dict:
+        expected_name: str | None = None, *, names: Collection[str] = ()) -> dict:
     if action == "confirm" and not expected_name:
         raise ValueError("confirm requires the exact displayed commander name")
     if action == "preview" and slot is None:
         raise ValueError("preview requires a visible row and column")
-    result = run_pipeline(tasker, action, CommanderRecognition(layouts, slot), expected_name)
+    result = run_pipeline(tasker, action, CommanderRecognition(layouts, slot, names=names), expected_name)
     return result if action == "confirm" else result["snapshot"]
 
 
@@ -123,11 +131,10 @@ def run_pipeline(tasker: Tasker, action: str, recognition: CommanderRecognition,
     if expected_name:
         override = {"Commander.ExpectedName": {"expected": "^" + re.escape(expected_name) + "$"}}
     with task_recognition(tasker, "ArkCommander", recognition):
-        job = tasker.post_task(entry, override).wait()
-    detail = job.get()
-    nodes = detail.nodes if detail else []
+        job = run_task(tasker, entry, override)
+    nodes = job.nodes
 
-    if not job.succeeded or not nodes or nodes[-1].name != terminal:
+    if not job.finished(terminal):
         if any(node.name == "Commander.ConfirmExpected" and node.action is not None for node in nodes):
             raise RuntimeError("Confirm was attempted once; the squad page was not verified")
         if any(node.name == "Commander.ClickSlot" and node.action is not None for node in nodes):
@@ -159,14 +166,21 @@ def save_portrait(path: Path, portrait: str | None) -> bool:
     return True
 
 
+def portrait_template(name: str) -> str:
+    return f"commander/{sha256(name.encode()).hexdigest()}.png"
+
+
 def select(tasker: Tasker, layouts: dict, name: str, *,
-           resource_path: Path = OCR_RESOURCE, fallback_names: tuple[str, ...] = ()) -> dict:
+           resource_path: Path = OCR_RESOURCE, fallback_names: tuple[str, ...] = (), catalog: Path = CATALOG) -> dict:
     if not name:
         raise ValueError("select requires the exact displayed commander name")
 
-    template = f"commander/{sha256(name.encode()).hexdigest()}.png"
-    cache_path = resource_path / "image" / template
-    probe = CommanderRecognition(layouts, template=template if cache_path.is_file() else None)
+    image_dir = resource_path / "image"
+    ordered = tuple(dict.fromkeys((name, *fallback_names)))
+    templates = {choice: portrait_template(choice) for choice in ordered}
+    cached = {choice: path for choice, path in templates.items() if (image_dir / path).is_file()}
+    names = index_names(read_json(catalog / "bands.json"))
+    probe = CommanderRecognition(layouts, templates=cached, names=names)
     observed = run_pipeline(tasker, "observe", probe)
     current = observed["snapshot"]
     scanned = []
@@ -174,26 +188,29 @@ def select(tasker: Tasker, layouts: dict, name: str, *,
         return {**run(tasker, "confirm", layouts, expected_name=name), "scanned": scanned,
                 "matchedBy": "currentPreview"}
 
-    matched_slot = observed.get("matchedSlot")
-    candidate = tuple(matched_slot) if matched_slot is not None else None
-    if candidate is not None:
+    matched = observed.get("matchedSlots", {})
+    for choice in ordered:
+        if choice not in matched:
+            continue
+        candidate = tuple(matched[choice])
         row, column = candidate
         try:
-            preview = run(tasker, "preview", layouts, candidate)
+            preview = run_pipeline(tasker, "preview", CommanderRecognition(layouts, candidate, names=names))
         except RuntimeError:
-            candidate = None
-        else:
-            scanned.append({"row": row, "column": column, "name": preview["commander"]})
-            if preview["commander"] == name:
-                return {**run(tasker, "confirm", layouts, expected_name=name), "scanned": scanned,
-                        "matchedBy": "template"}
+            continue
+        scanned.append({"row": row, "column": column, "name": preview["snapshot"]["commander"]})
+        if preview.get("exactName") == choice:
+            return {**run(tasker, "confirm", layouts, expected_name=choice), "scanned": scanned,
+                    "matchedBy": "template", "requested": name}
 
+    visited = {(entry["row"], entry["column"]) for entry in scanned}
+    captured = []
     grid = layouts["gridWithDetail"]
     for row, _ in enumerate(grid["rows"], 1):
         for column, _ in enumerate(grid["columns"], 1):
-            if (row, column) == candidate:
+            if (row, column) in visited:
                 continue
-            recognition = CommanderRecognition(layouts, (row, column), capture_portrait=True)
+            recognition = CommanderRecognition(layouts, (row, column), capture_portrait=True, names=names)
             try:
                 observed = run_pipeline(tasker, "preview", recognition)
             except RuntimeError as error:
@@ -201,16 +218,22 @@ def select(tasker: Tasker, layouts: dict, name: str, *,
                     continue
                 raise RuntimeError(f"Commander preview at row {row}, column {column}: {error}") from error
             preview = observed["snapshot"]
-            scanned.append({"row": row, "column": column, "name": preview["commander"]})
+            actual = preview["commander"]
+            scanned.append({"row": row, "column": column, "name": actual})
+            if exact := observed.get("exactName"):
+                path = image_dir / portrait_template(exact)
+                if not path.is_file() and save_portrait(path, observed.get("portrait")):
+                    captured.append(exact)
             if preview["commander"] == name:
                 result = run(tasker, "confirm", layouts, expected_name=name)
                 return {**result, "scanned": scanned, "matchedBy": "grid",
-                        "templateCached": save_portrait(cache_path, observed.get("portrait"))}
+                        "templatesCached": captured}
     for alternative in fallback_names:
         slot = next(((entry["row"], entry["column"]) for entry in scanned if entry["name"] == alternative), None)
-        if slot is not None and run(tasker, "preview", layouts, slot)["commander"] == alternative:
+        if slot is not None and run(tasker, "preview", layouts, slot, names=names)["commander"] == alternative:
             result = run(tasker, "confirm", layouts, expected_name=alternative)
-            return {**result, "scanned": scanned, "matchedBy": "availableCommander", "requested": name}
+            return {**result, "scanned": scanned, "matchedBy": "availableCommander", "requested": name,
+                    "templatesCached": captured}
     raise RuntimeError(f"Commander {name!r} was not found in the visible strategy grid")
 
 
@@ -219,9 +242,7 @@ def main() -> None:
     parser.add_argument("action", choices=(*ENTRIES, "select"))
     parser.add_argument("--slot", nargs=2, type=int, metavar=("ROW", "COLUMN"))
     parser.add_argument("--name", help="Exact displayed commander name for select or confirm")
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
+    add_session_args(parser)
     args = parser.parse_args()
     slot = tuple(args.slot) if args.slot else None
     if slot and any(value not in range(1, 5) for value in slot):
@@ -232,11 +253,8 @@ def main() -> None:
     if args.action in {"select", "confirm"} and not name:
         parser.error(f"{args.action} requires --name")
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
         slots = read_json(ROOT / "calib/slots.json")
-        tasker = load_ocr(connect(args.adb, args.address), args.ocr_resource)
+        tasker = session(args.adb, args.address, args.ocr_resource).tasker
         layouts = slots["commander"]
         if args.action == "select":
             result = select(tasker, layouts, name, resource_path=args.ocr_resource)
