@@ -9,8 +9,9 @@ from maa.context import Context
 from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
-from .native import Frame
+from .capture import add_session_args, session
+from .native import Frame, completed_data
+from .session import run as run_task, task_recognition
 from .read import CATALOG, clean, index_names, integer, read_json
 
 
@@ -36,10 +37,8 @@ class CommandRecognition(CustomRecognition):
         self.bands = index_names(read_json(catalog / "bands.json"))
         self.effects = read_json(catalog / "effects.json")
         self.commands = command_choice_names(catalog)
-        self.before = None
-        self.result = None
 
-    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> tuple | None:
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | None:
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
@@ -50,21 +49,25 @@ class CommandRecognition(CustomRecognition):
         funds = integer(frame.text("Screen.Funds"))
         if current_round is None or funds is None:
             return None
-        state = (current_round, funds)
-        if self.before is not None and state != self.before:
-            return None
+        state = {"round": current_round, "funds": funds}
         kind = json.loads(argv.custom_recognition_param)
         if kind == "closed":
-            return (0, 0, 1, 1) if scene == "preparation" and self.result is not None else None
-        if (kind == "read") != (scene == "commandDetails"):
+            read = completed_data(argv.task_detail.nodes, "Command.ReadClose")
+            if scene != "preparation" or read is None or read["state"] != state:
+                return None
+            return self.AnalyzeResult((0, 0, 1, 1), read["command"])
+        if (kind, scene) not in {("read", "commandDetails"), ("open", "preparation")}:
             return None
         labels = frame.rows("Command.View")
         if len(labels) != 1 or frame.hit("Screen.OperatorDetails"):
             return None
-        self.before = state
         if kind == "read":
-            self.result = {"round": current_round, "funds": funds, **self.details(frame)}
-        return tuple(labels[0].box)
+            opened = completed_data(argv.task_detail.nodes, "Command.Open")
+            if opened is not None and opened["state"] != state:
+                return None
+            return self.AnalyzeResult(tuple(labels[0].box),
+                                      {"state": state, "command": {**state, **self.details(frame)}})
+        return self.AnalyzeResult(tuple(labels[0].box), {"state": state})
 
     def details(self, frame: Frame) -> dict:
         name = clean(frame.text("Command.Name"))
@@ -96,32 +99,20 @@ class CommandRecognition(CustomRecognition):
 def inspect_command(tasker: Tasker, catalog: Path) -> dict:
     """Read the held command and verify return to the same preparation round."""
     recognition = CommandRecognition(catalog)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkCommand", recognition):
-        raise RuntimeError("Could not register command inspection")
-    try:
-        job = tasker.post_task("Command.Inspect").wait()
-        detail = job.get()
-        last = detail.nodes[-1].name if detail and detail.nodes else ""
-    finally:
-        resource.unregister_custom_recognition("ArkCommand")
-    if not job.succeeded or last != "Command.Closed" or recognition.result is None:
+    with task_recognition(tasker, "ArkCommand", recognition):
+        job = run_task(tasker, "Command.Inspect")
+    result = completed_data(job.nodes, "Command.Closed")
+    if not job.succeeded or result is None:
         raise RuntimeError("The command details or return to preparation could not be verified")
-    return recognition.result
+    return result
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
+    add_session_args(parser, catalog=CATALOG)
     args = parser.parse_args()
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        tasker = load_ocr(connect(args.adb, args.address), args.ocr_resource)
+        tasker = session(args.adb, args.address, args.ocr_resource).tasker
         print(json.dumps(inspect_command(tasker, args.catalog), ensure_ascii=False))
     except (OSError, RuntimeError, ValueError) as error:
         parser.exit(1, f"{error}\n")

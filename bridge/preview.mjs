@@ -59,18 +59,41 @@ export function previewFromKinds(waves, gd, { round, bossId = null, kinds, facti
   const keyOf = match === 'set' ? (list) => [...new Set(list.map((e) => e.enemyKey))].sort().join('|') : kindsKey;
   const want = keyOf(kinds.map((k) => ({ enemyKey: k })));
   const seen = new Map();
+  const candidates = [];
+  const knownLeader = boss && match === 'set' && gd.roundCfg(round)?.bossTemplates?.[bossId]
+    && kinds.includes(gd.boss(bossId)?.enemyKey);
+  let fixedKinds = null;
   let templateId = null;
   for (const pick of candidatePicks(gd, round)) {
-    if (allowed && !allowed.has(pick.type)) continue;
+    const eligible = !allowed || allowed.has(pick.type);
+    if (!eligible && !knownLeader) continue;
     if (pick.fly === null) pick.fly = !!gd.enemy(pick.key)?.motion && gd.enemy(pick.key).motion === 'FLY';
     const picks = []; picks[round] = pick;
     const w = boss ? waves.buildBossWave(gd, null, { picks }, round, { bossId, solo: true }) : waves.buildNormalWave(gd, null, { picks }, round);
+    const base = waves.previewOf(w.spawns);
+    if (knownLeader) {
+      const keys = new Set(base.map((e) => e.enemyKey));
+      fixedKinds = fixedKinds === null ? keys : new Set([...fixedKinds].filter((key) => keys.has(key)));
+    }
+    if (!eligible) continue;
     templateId = w.templateId;
     const extra = bounties && bounties.length ? waves.bountySpawns(gd, round, w, bounties, 'self', { solo: true }) : [];
-    const pv = waves.previewOf([...w.spawns, ...extra]);
-    if (keyOf(pv) !== want) continue;
-    const k = pv.map(full).join(';');
-    if (!seen.has(k)) seen.set(k, { pv, w });
+    const pv = extra.length ? waves.previewOf([...w.spawns, ...extra]) : base;
+    candidates.push({ pv, w, base });
+  }
+  const matchKinds = (expected) => {
+    for (const { pv, w } of candidates) {
+      if (keyOf(pv) !== expected) continue;
+      const k = pv.map(full).join(';');
+      if (!seen.has(k)) seen.set(k, { pv, w });
+    }
+  };
+  matchKinds(want);
+  if (!seen.size && fixedKinds?.size) {
+    // OCR can miss enemies that are present in every pick of a verified leader template.
+    // Keep all observed keys and recover only the invariant kinds.
+    const completed = keyOf([...kinds, ...fixedKinds].map((enemyKey) => ({ enemyKey })));
+    if (completed !== want) matchKinds(completed);
   }
   let all = [...seen.values()], approx = false;
   if (!all.length && match === 'set') {
@@ -78,11 +101,7 @@ export function previewFromKinds(waves, gd, { round, bossId = null, kinds, facti
     // the candidate covering the most screen kinds wins
     const screen = new Set(kinds);
     let best = -1;
-    for (const pick of candidatePicks(gd, round)) {
-      if (allowed && !allowed.has(pick.type)) continue;
-      const picks = []; picks[round] = pick;
-      const w = boss ? waves.buildBossWave(gd, null, { picks }, round, { bossId, solo: true }) : waves.buildNormalWave(gd, null, { picks }, round);
-      const pv = waves.previewOf(w.spawns);
+    for (const { base: pv, w } of candidates) {
       const ks = new Set(pv.map((e) => e.enemyKey));
       if (![...ks].every((k) => screen.has(k))) continue;
       if (ks.size > best) { best = ks.size; all = [{ pv, w }]; } else if (ks.size === best && all.length < 2 && all[0].pv.map(full).join(';') !== pv.map(full).join(';')) all.push({ pv, w });

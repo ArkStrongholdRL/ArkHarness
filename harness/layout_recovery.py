@@ -1,7 +1,8 @@
-"""Reconcile the two possible outcomes of one interrupted layout operation."""
+"""Reconcile interrupted layout operations using only their affected positions."""
 
 from copy import copy, deepcopy
 
+from .checkpoint import restore_track
 from .layout import as_tile
 from .screen.board_read import inspect_board_positions
 from .screen.equipment_read import read_equipment_slots
@@ -27,7 +28,7 @@ def layout_outcomes(track, step):
             raise ValueError("Interrupted withdrawal no longer matches its destination slot")
     else:
         key = f"{target[0]},{target[1]}"
-        if key in track.board or not changed.move(step["uid"], target, None):
+        if key in track.board or not changed.move(step["uid"], target, step.get("verifiedFacing")):
             raise ValueError("Interrupted placement no longer matches its destination tile")
     return changed
 
@@ -40,24 +41,53 @@ def matches_piece(observed, expected):
 
 
 def recover_layout_step(tasker, reader, board, track, step, screen):
+    changed = layout_outcomes(track, step)
+    piece = track._loc_by_uid(step["uid"])["piece"]
+    summon_slot = step["handSlot"] if piece.kind == "token" else None
+    return reconcile_layout(tasker, reader, board, track, changed, screen, step,
+                            summon_slot=summon_slot)
+
+
+def recover_layout_batch(tasker, reader, board, track, baseline, screen, pending=None):
+    before = copy(track)
+    before._bounty_picks = {}
+    restore_track(before, {"track": baseline["holdings"]})
+    possible = layout_outcomes(track, pending) if pending else None
+    return reconcile_layout(tasker, reader, board, track, before, screen, baseline,
+                            possible=possible, require_count=True)
+
+
+def reconcile_layout(tasker, reader, board, track, changed, screen, scope, *,
+                     summon_slot=None, possible=None, require_count=False):
     rnd, own = screen["match"]["round"], screen["self"]
-    if step["round"] != rnd or step["stageId"] != board["stageId"]:
+    if scope["round"] != rnd or scope["stageId"] != board["stageId"]:
         raise RuntimeError("The interrupted layout step is from a different preparation round or stage")
     funds, cap, count = (own.get(key) for key in ("funds", "deployCap", "deployCount"))
     if any(type(value) is not int for value in (funds, cap, count)):
         raise RuntimeError("Preparation HUD is incomplete for layout recovery")
-    changed = layout_outcomes(track, step)
-
     def signature(piece):
-        return (piece.kind, piece.id) if piece else None
+        return (piece.kind, piece.uid, piece.id, piece.count) if piece else None
 
-    slots = [i for i, (before, after) in enumerate(zip(track.hand, changed.hand))
-             if signature(before) != signature(after)]
-    rack_slots = [i for i, (before, after) in enumerate(zip(track.temp[:TEMP], changed.temp[:TEMP]))
-                  if signature(before) != signature(after)]
-    keys = sorted(k for k in track.board.keys() | changed.board.keys()
-                  if signature(track.board.get(k)) != signature(changed.board.get(k)))
+    outcomes = [(False, track), (True, changed)]
+    if possible is not None:
+        outcomes.append((True, possible))
+    alternatives = [candidate for applied, candidate in outcomes if applied]
+    if require_count:
+        outcomes = [(applied, candidate) for applied, candidate in outcomes
+                    if candidate.deployed_chess_count() == count]
+    if not outcomes:
+        raise RuntimeError(f"No saved layout outcome matches the live deployment count ({count})")
+    slots = sorted({i for candidate in alternatives for i, (before, after) in enumerate(zip(track.hand, candidate.hand))
+                    if signature(before) != signature(after)} | ({summon_slot} if summon_slot is not None else set()))
+    rack_slots = sorted({i for candidate in alternatives
+                         for i, (before, after) in enumerate(zip(track.temp[:TEMP], candidate.temp[:TEMP]))
+                         if signature(before) != signature(after)})
+    keys = sorted({k for candidate in alternatives for k in track.board.keys() | candidate.board.keys()
+                   if signature(track.board.get(k)) != signature(candidate.board.get(k))})
     tiles = [as_tile(key) for key in keys]
+    if not (tiles or slots or rack_slots):
+        # With no observable changes, retain the recorded facing and UID assignments.
+        return {"applied": False, "handSlots": [], "rackSlots": [], "tiles": []}
     view = set_shop_open(tasker, False)
     try:
         if (view["before"]["round"], view["before"]["funds"]) != (rnd, funds):
@@ -86,7 +116,6 @@ def recover_layout_step(tasker, reader, board, track, step, screen):
                 and all(matches_piece(observed_rack[i], candidate.temp[i]) for i in rack_slots)
                 and all(matches_piece(observed_board[tile], candidate.board.get(key)) for key, tile in zip(keys, tiles)))
 
-    outcomes = [(False, track), (True, changed)]
     verified = [(applied, candidate) for applied, candidate in outcomes if matches(candidate)]
     if len(verified) != 1:
         raise RuntimeError(f"Could not determine the interrupted layout outcome for hand slots {slots} and tiles {tiles}")

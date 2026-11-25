@@ -17,11 +17,18 @@
   },
   "Commander.ClickSlot": {
     "recognition": "And",
-    "all_of": ["Lifecycle.Strategy", "Commander.Slot"],
+    "all_of": [
+      "Lifecycle.Strategy",
+      "Commander.Slot"
+    ],
     "box_index": 1,
-    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
     "max_hit": 1,
-    "next": ["Commander.PreviewOpened"],
+    "next": [
+      "Commander.PreviewOpened"
+    ],
     "timeout": 4000
   },
   "Commander.PreviewOpened": {
@@ -30,11 +37,19 @@
   },
   "Commander.ConfirmExpected": {
     "recognition": "And",
-    "all_of": ["Lifecycle.Strategy", "Commander.ConfirmText", "Commander.ExpectedName"],
+    "all_of": [
+      "Lifecycle.Strategy",
+      "Commander.ConfirmText",
+      "Commander.ExpectedName"
+    ],
     "box_index": 1,
-    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "action": "Click",
+    "pre_delay": 200,
+    "post_delay": 200,
     "max_hit": 1,
-    "next": ["Lifecycle.Squad"],
+    "next": [
+      "Lifecycle.Squad"
+    ],
     "timeout": 6500
   },
   "Commander.GridPlain": {

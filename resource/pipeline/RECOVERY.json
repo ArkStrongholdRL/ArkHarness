@@ -36,7 +36,6 @@
   "Recovery.Resume": {
     "recognition": "And",
     "all_of": [
-      "Lifecycle.Entrance", "Recovery.SavedRound",
       {"recognition": "OCR", "roi": [1090, 649, 177, 47], "expected": "^断线重连$"}
     ],
     "action": "Click", "target": [1120, 650], "max_hit": 1,

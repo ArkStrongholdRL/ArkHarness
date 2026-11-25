@@ -11,11 +11,12 @@ from maa.define import MaaAdbInputMethodEnum
 from maa.tasker import Tasker
 
 from .board_read import read_board_tiles
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
+from .capture import add_session_args, session
 from .deploy import read_board, tile_point
 from .equipment_read import read_equipment_slots
-from .native import Frame
-from .read import CATALOG, ROOT, Reader, clean, integer, read_json
+from .native import Frame, completed_data
+from .session import run as run_task, task_recognition
+from .read import CATALOG, ROOT, Reader, clean, integer
 
 
 def equipment_funds_match(gained: int, expected: int | None,
@@ -37,10 +38,8 @@ class EquipRecognition(CustomRecognition):
         self.expected_round = expected_round
         self.stage = stage
         self.highlight_roi = None
-        self.before = None
-        self.after = None
 
-    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> tuple | None:
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | tuple | None:
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
@@ -59,17 +58,18 @@ class EquipRecognition(CustomRecognition):
             return None
         state = {"round": current_round, "funds": funds}
         if kind == "before":
-            if self.before is not None and state != self.before:
+            opened = completed_data(argv.task_detail.nodes, "Equip.OpenShop")
+            if opened is not None and state != opened:
                 return None
-            self.before = state
-        else:
-            before = self.before
+        elif kind == "after":
+            before = completed_data(argv.task_detail.nodes, "Equip.Pick")
             if before is None or current_round != before["round"]:
                 return None
             if not equipment_funds_match(funds - before["funds"], self.expected_gain, self.gain_range):
                 return None
-            self.after = state
-        return (0, 0, 1, 1)
+        else:
+            return None
+        return self.AnalyzeResult((0, 0, 1, 1), state)
 
 
 def equip_to_hand(tasker: Tasker, calibration: dict, item_slot: int, hand_slot: int,
@@ -82,8 +82,8 @@ def equip_to_hand(tasker: Tasker, calibration: dict, item_slot: int, hand_slot: 
     result = drag_equipment(tasker, calibration, item_slot, name, targets[hand_slot],
                             EquipRecognition(expected_gain, expected_round=expected_round, gain_range=gain_range),
                             entry="Equip.Hand", opens_choice=opens_choice)
-    if reader is not None and not opens_choice and not expected_gain:
-        verify_rack_source(tasker, reader, result)
+    if reader is not None and not opens_choice:
+        verify_equipment_receipt(tasker, reader, result)
     return {"handSlot": hand_slot, **result}
 
 
@@ -107,10 +107,16 @@ def equip_to_board(tasker: Tasker, reader: Reader, board: dict, item_slot: int, 
                                    stage=None if tracked else board["stageId"], gain_range=gain_range)
     result = drag_equipment(tasker, reader.slots, item_slot, name, target, recognition, entry="Equip.Board",
                             tracked=tracked, opens_choice=opens_choice)
-    if not opens_choice and not expected_gain:
-        verify_rack_source(tasker, reader, result)
+    if not opens_choice:
+        verify_equipment_receipt(tasker, reader, result)
     return {"stageId": board["stageId"], "row": row, "col": col,
             "operatorName": operator_name, "attachmentVerified": False, **result}
+
+
+def verify_equipment_receipt(tasker: Tasker, reader: Reader, result: dict) -> None:
+    if result.get("fundsGainVerified") and result["after"]["funds"] > result["before"]["funds"]:
+        return
+    verify_rack_source(tasker, reader, result)
 
 
 def verify_rack_source(tasker: Tasker, reader: Reader, result: dict) -> None:
@@ -191,22 +197,17 @@ def drag_equipment(tasker: Tasker, calibration: dict, item_slot: int, name: str,
         override["Equip.Lift"]["next"] = ["Equip.DestroyHover"]
     if opens_choice and not tracked:
         override["Equip.Drop"] = {"next": [terminal]}
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkEquip", recognition):
-        raise RuntimeError("Could not register the equip recognizer")
-    try:
-        job = tasker.post_task(entry, override).wait()
-        detail = job.get()
-        nodes = [node.name for node in detail.nodes] if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkEquip")
-    if not job.succeeded or not nodes or nodes[-1] != terminal or (not opens_choice and recognition.after is None):
-        if {"Equip.Drop", "Equip.DropTracked", "Equip.DestroyDrop"}.intersection(nodes):
+    with task_recognition(tasker, "ArkEquip", recognition):
+        job = run_task(tasker, entry, override)
+    before = completed_data(job.nodes, "Equip.Pick")
+    after = completed_data(job.nodes, "Equip.Returned")
+    if not job.finished(terminal) or before is None or (not opens_choice and after is None):
+        if {"Equip.Drop", "Equip.DropTracked", "Equip.DestroyDrop"}.intersection(job.names):
             raise RuntimeError("Equipment was released, but its expected postcondition was not verified")
         raise RuntimeError("Equip did not reach a verified item and highlighted target")
     return {
         "itemSlot": item_slot, "name": name,
-        "before": recognition.before, "after": recognition.after,
+        "before": before, "after": after,
         "fundsGainVerified": recognition.expected_gain is not None or recognition.gain_range is not None,
     }
 
@@ -220,26 +221,21 @@ def main() -> None:
     parser.add_argument("--name", required=True)
     parser.add_argument("--operator", help="Exact displayed operator name for --tile")
     parser.add_argument("--board", type=Path, default=ROOT / "calib/board.json")
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
+    add_session_args(parser, catalog=CATALOG)
     parser.add_argument("--expected-gain", type=int, help="Require this change in funds after equipping")
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
     args = parser.parse_args()
     if args.tile is not None and not args.operator:
         parser.error("--tile requires --operator")
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        controller = connect(args.adb, args.address, input_methods=MaaAdbInputMethodEnum.Maatouch)
-        tasker = load_ocr(controller, args.ocr_resource)
-        slots = read_json(ROOT / "calib/slots.json")
+        screen_session = session(args.adb, args.address, args.ocr_resource,
+                                 input_methods=MaaAdbInputMethodEnum.Maatouch, catalog=args.catalog)
+        tasker, reader = screen_session.tasker, screen_session.reader
+        slots = reader.slots
         if args.tile is None:
             result = equip_to_hand(tasker, slots, args.item_slot, args.hand_slot, args.name,
-                                   expected_gain=args.expected_gain, reader=Reader(args.catalog, slots))
+                                   expected_gain=args.expected_gain, reader=reader)
         else:
-            result = equip_to_board(tasker, Reader(args.catalog, slots), read_board(args.board),
+            result = equip_to_board(tasker, reader, read_board(args.board),
                                     args.item_slot, args.name, *args.tile, args.operator,
                                     expected_gain=args.expected_gain)
         print(json.dumps(result, ensure_ascii=False))

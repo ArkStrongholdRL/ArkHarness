@@ -4,6 +4,11 @@
     "timeout": 6000,
     "on_error": ["ArkUnexpectedScreen"]
   },
+  "ArkInspectEnemiesScrolled": {
+    "next": ["ArkOpenEnemyPreviewForScroll"],
+    "timeout": 6000,
+    "on_error": ["ArkUnexpectedScreen"]
+  },
   "ArkOpenEnemyPreview": {
     "recognition": "And",
     "all_of": ["ArkEnemyPreviewButton", "ArkRest", "ArkExpectedRound"],
@@ -25,6 +30,17 @@
     "timeout": 6000,
     "on_error": ["ArkRestNotRecovered"]
   },
+  "ArkOpenEnemyPreviewForScroll": {
+    "recognition": "And",
+    "all_of": ["ArkEnemyPreviewButton", "ArkRest", "ArkExpectedRound"],
+    "action": "Click", "pre_delay": 200,
+    "max_hit": 1,
+    "post_wait_freezes": {"target": [746, 64, 432, 282], "time": 250, "rate_limit": 100, "threshold": 0.99, "timeout": 1800},
+    "post_delay": 350,
+    "next": ["ArkScrollEnemyPreview"],
+    "timeout": 6000,
+    "on_error": ["ArkPanelNotFound"]
+  },
   "ArkScrollEnemyPreview": {
     "recognition": "Custom",
     "custom_recognition": "ArkNavigation",
@@ -35,8 +51,18 @@
     "duration": 320,
     "post_delay": 350,
     "max_hit": 1,
-    "next": ["ArkCloseEnemyPreview"],
+    "next": ["ArkCloseEnemyPreviewScrolled"],
     "timeout": 6000
+  },
+  "ArkCloseEnemyPreviewScrolled": {
+    "recognition": "Custom",
+    "custom_recognition": "ArkNavigation",
+    "custom_recognition_param": "enemyPreviewScrolled",
+    "action": "Click", "pre_delay": 200, "post_delay": 200,
+    "max_hit": 1,
+    "next": ["ArkReturnedRest"],
+    "timeout": 6000,
+    "on_error": ["ArkRestNotRecovered"]
   },
   "ArkEnemyPreviewButton": {
     "recognition": "Custom",

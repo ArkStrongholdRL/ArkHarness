@@ -9,9 +9,10 @@ from maa.custom_recognition import CustomRecognition
 from maa.define import MaaAdbInputMethodEnum
 from maa.tasker import Tasker
 
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
-from .native import Frame
-from .read import CATALOG, ROOT, Reader, catalog_identity, integer, read_json
+from .capture import add_session_args, session
+from .native import Frame, completed_data
+from .read import CATALOG, Reader, catalog_identity, integer
+from .session import run as run_task, task_recognition
 from .shop import set_shop_open
 
 
@@ -25,33 +26,32 @@ def hud_status(frame: Frame) -> tuple[int, int] | None:
 
 
 class EquipmentReadRecognition(CustomRecognition):
-    def __init__(self, reader: Reader):
+    def __init__(self, reader: Reader, expected_hud: tuple[int, int]):
         super().__init__()
         self.reader = reader
-        self.status = None
-        self.slot = None
-        self.result = None
+        self.expected_hud = expected_hud
 
-    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> tuple | None:
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | tuple | None:
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
         kind = json.loads(argv.custom_recognition_param)
         hit = (0, 0, 1, 1)
         if kind == "name":
-            self.result = {"screenSlot": self.slot, "status": "occupied",
-                           **catalog_identity(self.reader, frame, "EquipmentRead.Name", "item")}
-            return hit
-        status = hud_status(frame)
-        if status is None or self.status not in (None, status) or frame.hit("Equip.DragHint"):
+            identity = catalog_identity(self.reader, frame, "EquipmentRead.Name", "item")
+            return self.AnalyzeResult(hit, {"status": "occupied", **identity})
+        if hud_status(frame) != self.expected_hud or frame.hit("Equip.DragHint"):
             return None
         if kind == "before":
-            self.status = status
             return hit
         if kind == "empty":
-            self.result = {"screenSlot": self.slot, "status": "empty", "name": None, "id": None,
-                           "baseId": None, "candidateIds": []}
-        return hit if self.result is not None else None
+            return self.AnalyzeResult(hit, {"status": "empty", "name": None, "id": None,
+                                            "baseId": None, "candidateIds": []})
+        if kind == "restored":
+            result = completed_data(argv.task_detail.nodes, "EquipmentRead.Held", "EquipmentRead.Empty")
+            if result is not None:
+                return self.AnalyzeResult(hit, result)
+        return None
 
 
 def read_equipment_slots(tasker: Tasker, reader: Reader, indices: list[int] | None = None) -> dict:
@@ -64,52 +64,40 @@ def read_equipment_slots(tasker: Tasker, reader: Reader, indices: list[int] | No
     if len(set(selected)) != len(selected):
         raise ValueError("Equipment slots must be unique")
 
-    recognition = EquipmentReadRecognition(reader)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkEquipmentRead", recognition):
-        raise RuntimeError("Could not register equipment rack inspection")
     observations = []
     view = None
     try:
         view = set_shop_open(tasker, True)
+        current_round, funds = view["after"]["round"], view["after"]["funds"]
+        recognition = EquipmentReadRecognition(reader, (current_round, funds))
         dx, dy = rack["liftOffset"]
-        for slot in selected:
-            recognition.slot, recognition.result = slot, None
-            x, y = centers[slot]
-            job = tasker.post_task("EquipmentRead.ScanSlot", {
-                "EquipmentRead.Pick": {"target": [x, y]},
-                "EquipmentRead.Lift": {"target": [x + dx, y + dy]},
-            }).wait()
-            detail = job.get()
-            last = detail.nodes[-1].name if detail and detail.nodes else ""
-            if not job.succeeded or last != "EquipmentRead.Restored" or recognition.result is None:
-                raise RuntimeError(f"Equipment slot {slot} or return from the drag could not be verified")
-            observations.append(recognition.result)
+        with task_recognition(tasker, "ArkEquipmentRead", recognition):
+            for slot in selected:
+                x, y = centers[slot]
+                job = run_task(tasker, "EquipmentRead.ScanSlot", {
+                    "EquipmentRead.Pick": {"target": [x, y]},
+                    "EquipmentRead.Lift": {"target": [x + dx, y + dy]},
+                })
+                result = completed_data(job.nodes, "EquipmentRead.Restored")
+                if not job.succeeded or result is None:
+                    raise RuntimeError(f"Equipment slot {slot} or return from the drag could not be verified")
+                observations.append({"screenSlot": slot, **result})
     finally:
-        resource.unregister_custom_recognition("ArkEquipmentRead")
         if view is not None and view["clicked"]:
             set_shop_open(tasker, False)
-    current_round, funds = recognition.status
-    if (current_round, funds) != (view["before"]["round"], view["before"]["funds"]):
-        raise RuntimeError("The preparation round or funds changed during rack inspection")
     return {"round": current_round, "funds": funds, "slots": observations}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--item-slot", type=int, action="append", dest="indices")
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
+    add_session_args(parser, catalog=CATALOG)
     args = parser.parse_args()
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        reader = Reader(args.catalog, read_json(ROOT / "calib/slots.json"))
-        controller = connect(args.adb, args.address, input_methods=MaaAdbInputMethodEnum.Maatouch)
-        print(json.dumps(read_equipment_slots(load_ocr(controller, args.ocr_resource), reader, args.indices),
+        screen_session = session(args.adb, args.address, args.ocr_resource,
+                                 input_methods=MaaAdbInputMethodEnum.Maatouch, catalog=args.catalog)
+        tasker, reader = screen_session.tasker, screen_session.reader
+        print(json.dumps(read_equipment_slots(tasker, reader, args.indices),
                          ensure_ascii=False))
     except (OSError, RuntimeError, ValueError) as error:
         parser.exit(1, f"{error}\n")

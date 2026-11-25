@@ -7,10 +7,16 @@ from .track import Track
 
 
 DIRECTIONS = {"UP", "RIGHT", "DOWN", "LEFT"}
+MONSTR_PROSTHESIS = "token_10050_monstr_prosts"
 
 
 def tile_key(tile: tuple[int, int]) -> str:
     return f"{tile[0]},{tile[1]}"
+
+
+def calibrated_layout_tiles(board: dict) -> set[tuple[int, int]]:
+    return set.intersection(*({tuple(cell[:2]) for cell in board["views"][view]["groundCenters"]}
+                              for view in ("normal", "drag")))
 
 
 def layout_tiles(stage: dict, view: str) -> dict[str, str]:
@@ -27,11 +33,16 @@ def piece_features(record: dict) -> dict:
     if not position and record.get("chessType") == "DIY":
         raise ValueError("A self-selected operator needs its resolved catalog record")
     cls = {"MELEE": "melee", "RANGED": "ranged"}.get(position, "all")
+    placement = cls
+    if record.get("rangedTilesOnly") is True:
+        placement = "high"
+    elif cls == "melee" and record.get("placeOnRanged") is True:
+        placement = "all"
     attack = record.get("attackKind")
     heal = record.get("dmgType") == "heal" or attack == "heal"
     block = (record.get("stats") or {}).get("blockCnt")
     block = 1 if block is None else max(0, block)
-    return {"cls": cls, "block": block if cls == "melee" and attack != "none" else 0,
+    return {"cls": cls, "placement": placement, "block": block if cls == "melee" and attack != "none" else 0,
             "heal": heal, "air": bool(record.get("canHitFly")) and not heal and attack != "none",
             "ground": not heal}
 
@@ -83,7 +94,11 @@ def build_layout_state(track: Track, screen: dict, selected_uids: list[int], *,
         pieces.append({"uid": uid, "id": piece.id, "golden": track.gd.is_golden(piece.id),
                        "items": [item.id for item in piece.items], **piece_features(record),
                        "key": loc.get("key"), "dir": piece.dir if loc["area"] == "board" else None})
-    return {"pieces": pieces, "map": layout_tiles(stage, view), "bonds": bonds,
+    tiles = layout_tiles(stage, view)
+    for key, piece in track.board.items():
+        if piece.id == MONSTR_PROSTHESIS and piece.owner in selected_uids:
+            tiles.pop(key, None)
+    return {"pieces": pieces, "map": tiles, "bonds": bonds,
             "bossTemplate": boss_template, "lp": lp, "deployCap": cap, "side": side}
 
 
@@ -107,12 +122,15 @@ def plan_layout(track: Track, state: dict, result: dict, calibrated: set[tuple[i
         raise ValueError("Two operators have the same layout destination")
     tiles = state["map"]
     for uid, (tile, direction) in targets.items():
-        if (len(tile) != 2 or any(type(value) is not int for value in tile) or tile not in calibrated
-                or not permits(tiles, profiles[uid], tile) or direction not in DIRECTIONS):
-            raise ValueError(f"Invalid or uncalibrated layout destination for UID {uid}")
+        if len(tile) != 2 or any(type(value) is not int for value in tile) or direction not in DIRECTIONS:
+            raise ValueError(f"Invalid layout destination {tile} or facing {direction!r} for UID {uid}")
+        if tile not in calibrated:
+            raise ValueError(f"Uncalibrated layout destination {tile} for UID {uid}")
+        if not permits(tiles, profiles[uid], tile):
+            raise ValueError(f"Layout destination {tile} is not deployable for UID {uid} ({profiles[uid]['id']})")
     for key, piece in track.board.items():
-        if piece.kind != "chess" or as_tile(key) not in calibrated:
-            raise ValueError("Layout requires a calibrated board of trackable operators")
+        if piece.kind not in {"chess", "token"} or as_tile(key) not in calibrated:
+            raise ValueError("Layout requires a calibrated board of trackable pieces")
     for uid, profile in profiles.items():
         loc = track._loc_by_uid(uid)
         if (loc is None or loc["area"] not in {"board", "hand"} or loc["piece"].id != profile["id"]
@@ -128,7 +146,11 @@ def plan_layout(track: Track, state: dict, result: dict, calibrated: set[tuple[i
     staged = set()
     profile_order = list(targets)
     while True:
-        excess = [piece.uid for piece in shadow.board.values() if piece.uid not in targets]
+        leaving_owners = {piece.uid for piece in shadow.board.values()
+                          if piece.kind == "chess" and piece.uid not in targets}
+        excess = [piece.uid for piece in sorted(shadow.board.values(), key=lambda p: p.kind != "token")
+                  if piece.uid not in targets and piece.id != MONSTR_PROSTHESIS
+                  and (piece.kind != "token" or piece.owner not in leaving_owners)]
         pending = [uid for uid in profile_order if not at_destination(shadow._loc_by_uid(uid), targets[uid])]
         if not pending and not excess:
             return steps
@@ -140,7 +162,7 @@ def plan_layout(track: Track, state: dict, result: dict, calibrated: set[tuple[i
             target, direction = targets[uid]
             loc = shadow._loc_by_uid(uid)
             if tile_key(target) not in shadow.board and (loc["area"] == "board"
-                    or len(shadow.board) < state["deployCap"]):
+                    or shadow.deployed_chess_count() < state["deployCap"]):
                 simulate(shadow, steps, uid, target, direction)
                 break
         else:
@@ -180,7 +202,8 @@ def as_tile(key: str) -> tuple[int, int]:
 
 def permits(tiles: dict, profile: dict, tile: tuple[int, int]) -> bool:
     kind = tiles.get(tile_key(tile))
-    return kind == "melee" or (kind == "ranged" and profile["cls"] != "melee")
+    placement = profile["placement"] if "placement" in profile else profile["cls"]
+    return (kind == "melee" and placement != "high") or (kind == "ranged" and placement != "melee")
 
 
 def at_destination(loc: dict, target: tuple) -> bool:

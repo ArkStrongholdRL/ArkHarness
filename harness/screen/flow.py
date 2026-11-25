@@ -2,20 +2,25 @@
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import numpy as np
 from maa.context import Context
+from maa.custom_action import CustomAction
 from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
 from ..wave import match_preview
 from .bounty import SLOTS as BOUNTY_SLOTS
+from .boss_timing import BossTiming
 from .briefing import choose_bond_group, inspect_briefing
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
+from .capture import OCR_RESOURCE, add_session_args, session
 from .commander import select as select_commander
-from .native import Frame
+from .native import MIN_NAME_SCORE, Frame, recognition_data
+from .names import match_name
 from .read import CATALOG, ROOT, Reader, clean, integer, read_json, read_screen
+from .session import run as run_task, task_recognition
 from .state import (
     BATTLE_ACTIONS, BRIEFING_ACTIONS, DRAFT_SCREENS, INSPECTIONS, LIVE_SCREENS, LiveScreen, require_action, require_return,
     screen_snapshot,
@@ -31,16 +36,16 @@ ENTRIES = {
     "inspect-enemies": ("ArkInspectEnemies", "ArkReturnedRest"),
     "inspect-bond": ("ArkInspectBond", "ArkReturnedRest"),
     "start-battle": ("ArkStartBattle", "ArkRestAfterBattle"),
-    "ready-battle": ("ArkStartBattle", "ArkBattleStarted"),
+    "ready-battle": ("ArkReadyBattle", "ArkBattleStarted"),
     "wait-battle": ("ArkWaitBattle", "ArkRestAfterBattle"),
     "leave-match": ("Interrupt.Leave", "Interrupt.SavedEntrance"),
     "interrupt-match": ("Interrupt.End", "Interrupt.NewEntrance"),
     "select-bounty": ("Bounty.Select", "ArkReturnedRest"),
-    "select-equipment": ("Bounty.Select", "ArkReturnedRest"),
-    "select-tactic": ("Bounty.Select", "ArkReturnedRest"),
+    "select-equipment": ("Supply.Select", "ArkReturnedRest"),
+    "select-tactic": ("Tactic.Select", "ArkReturnedRest"),
     "recover-match": ("Recovery.Route", "Recovery.Returned"),
 }
-DRAFT_ACTIONS = {"select-bounty": "Bounty.Screen", "select-equipment": "Supply.Screen", "select-tactic": "Tactic.Screen"}
+DRAFT_ACTIONS = {"select-bounty", "select-equipment", "select-tactic"}
 ERRORS = {
     "Entry.SavedMatch": "A saved match is displayed at the entrance; no opening input was sent",
     "ArkUnexpectedScreen": "Expected the preparation anchor or a supported panel for close-panel",
@@ -49,6 +54,23 @@ ERRORS = {
     "ArkBattleNotVerified": "The requested battle or post-battle phase was not verified",
 }
 ENTRY_CHECKPOINTS = {"briefing": "Entry.BriefingCheckpoint", "squadSelection": "Entry.SquadCheckpoint"}
+
+
+class ReadyAction(CustomAction):
+    def __init__(self, navigation):
+        super().__init__()
+        self.navigation = navigation
+
+    def run(self, context, argv):
+        round_number = next((data["readyRound"] for data in recognition_data(argv.reco_detail)
+                             if "readyRound" in data), None)
+        if round_number is None:
+            return False
+        click = context.run_action("ArkClickReady", argv.box)
+        if click is None or not click.success:
+            return False
+        self.navigation.started_round = round_number
+        return True
 
 
 class NavigationRecognition(CustomRecognition):
@@ -61,25 +83,43 @@ class NavigationRecognition(CustomRecognition):
         self.reader = reader
         self.expected_round = expected_round
         self.bounty = bounty
-        self.bounty_target_verified = False
         self.started_round = None
         self.snapshot = None
         self.stage_id = None
         self.inspection = None
         self.inspection_error = None
         self.steps = []
+        self.boss_timing = None
 
     def point(self, name: str) -> tuple[int, int, int, int]:
         x, y = self.buttons[name]["center"]
         return x, y, 1, 1
 
-    def panel_hit(self, frame: Frame, action: str, target: tuple) -> tuple:
+    def panel_result(self, frame: Frame, action: str, target: tuple):
         if self.action == action and self.reader is not None:
             try:
-                self.inspection = self.reader.read(frame)
+                return self.AnalyzeResult(target, {"inspection": self.reader.read(frame)})
             except (OSError, RuntimeError, ValueError) as error:
-                self.inspection_error = str(error)
+                return self.AnalyzeResult(target, {"inspectionError": str(error)})
         return target
+
+    def collect_results(self, nodes):
+        self.snapshot = self.stage_id = self.inspection = self.inspection_error = None
+        for node in nodes:
+            if not node.completed:
+                continue
+            for data in recognition_data(node.recognition):
+                if "snapshot" in data:
+                    self.snapshot = data["snapshot"]
+                    self.stage_id = data.get("stageId")
+                if "inspection" in data:
+                    self.inspection = data["inspection"]
+                if "inspectionError" in data:
+                    self.inspection_error = data["inspectionError"]
+                if "scrolledEnemies" in data and self.inspection is not None:
+                    kinds, ambiguous = data["scrolledEnemies"]
+                    self.inspection["enemyKinds"] = sorted(set(self.inspection["enemyKinds"]) | set(kinds))
+                    self.inspection["ambiguousEnemyNames"].update(ambiguous)
 
     @staticmethod
     def selected_bond(frame: Frame) -> tuple[int, int, int, int] | None:
@@ -91,16 +131,23 @@ class NavigationRecognition(CustomRecognition):
         return x + width // 2, 89, 1, 1
 
     def named_bond(self, frame: Frame) -> tuple | None:
+        if self.reader is None:
+            return None
         candidates = [box[0] + 27 for box in frame.bond_boxes()
-                      if clean(frame.text("Screen.BondName", roi=box)) == self.bond]
+                      if match_name(clean(frame.text("Screen.BondName", roi=box, min_score=MIN_NAME_SCORE)),
+                                    self.reader.bonds) == self.bond]
         return (candidates[0], 89, 1, 1) if len(candidates) == 1 else None
 
-    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> tuple | None:
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | tuple | None:
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
         kind = json.loads(argv.custom_recognition_param)
         hit = (0, 0, 1, 1)
+        if kind == "bossTiming":
+            if self.boss_timing is not None:
+                self.boss_timing.sample(frame)
+            return None
         if kind == "savedRound":
             current = integer(frame.text("Entry.ResumeSoloText"), r"当前回合([0-9]+)")
             return hit if current is not None and self.expected_round in (None, current) else None
@@ -116,10 +163,7 @@ class NavigationRecognition(CustomRecognition):
                 and (current in (self.expected_round, self.expected_round + 1) or snapshot.get("leaderBattle"))
             )
             next_draft = screen in DRAFT_SCREENS and current in (None, self.expected_round + 1)
-            if same_match or next_draft:
-                self.snapshot = snapshot
-                return hit
-            return None
+            return self.AnalyzeResult(hit, {"snapshot": snapshot}) if same_match or next_draft else None
         if kind in {"bountyTarget", "bountyConfirm"} and self.reader is not None and self.bounty is not None:
             slot, card_id = self.bounty
             equipment = self.action == "select-equipment"
@@ -137,7 +181,6 @@ class NavigationRecognition(CustomRecognition):
                 if len(labels) != 1:
                     return None
                 box = tuple(labels[0].box)
-            self.bounty_target_verified = True
             return box
         if kind == "matchInfo":
             return self.point(kind) if frame.hit("Screen.MatchInfoButton") else None
@@ -146,7 +189,7 @@ class NavigationRecognition(CustomRecognition):
         if kind == "closeMatchInfo":
             if not frame.hit("Screen.MatchInfoCross"):
                 return None
-            return self.panel_hit(frame, "inspect-info", self.point(kind))
+            return self.panel_result(frame, "inspect-info", self.point(kind))
         if kind in ("expectedRound", "rememberRound", "laterRound", "startedRound"):
             current = integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)")
             if kind == "laterRound":
@@ -156,88 +199,74 @@ class NavigationRecognition(CustomRecognition):
                 if self.started_round is not None and (
                     current == self.started_round or current is None and frame.hit("Battle.LeaderActive")
                 ):
-                    self.snapshot = {"screen": "battle", "round": self.started_round, "canReady": False}
+                    snapshot = {"screen": "battle", "round": self.started_round, "canReady": False}
                     if current is None:
-                        self.snapshot["leaderBattle"] = True
-                    return hit
+                        snapshot["leaderBattle"] = True
+                        if self.boss_timing is not None:
+                            self.boss_timing.start(frame)
+                    return self.AnalyzeResult(hit, {"snapshot": snapshot})
                 return None
             if current is None or self.expected_round is not None and current != self.expected_round:
                 return None
             if kind == "rememberRound":
-                self.started_round = current
+                return self.AnalyzeResult(hit, {"readyRound": current})
             return hit
 
-        if kind == "enemyPreviewScrolled" and self.inspection is not None and self.reader is not None:
-            kinds, ambiguous = self.reader.read_enemy_kinds(frame)
-            self.inspection["enemyKinds"] = sorted(set(self.inspection["enemyKinds"]) | set(kinds))
-            self.inspection["ambiguousEnemyNames"].update(ambiguous)
-            return self.point("enemyPreview")
+        if kind == "enemyPreviewScrolled":
+            first_page_read = any(
+                "inspection" in data
+                for node in argv.task_detail.nodes if node.name == "ArkScrollEnemyPreview" and node.completed
+                for data in recognition_data(node.recognition)
+            )
+            if first_page_read and self.reader is not None:
+                return self.AnalyzeResult(self.point("enemyPreview"),
+                                          {"scrolledEnemies": self.reader.read_enemy_kinds(frame)})
+            return None
 
+        if kind == "namedBond":
+            return self.named_bond(frame)
+        if kind == "snapshot":
+            snapshot = screen_snapshot(frame)
+            if snapshot.get("leaderBattle") and self.started_round is not None:
+                snapshot["round"] = self.started_round
+            stage = frame.stage_id() if snapshot["screen"] == "preparation" else None
+            return self.AnalyzeResult(hit, {"snapshot": snapshot, "stageId": stage})
         screen = frame.scene()
         if kind == "preparation":
             return hit if screen == "preparation" else None
         if kind == "ready":
             return self.point("ready") if screen == "preparation" and frame.hit("Screen.ReadyColor") else None
-        if kind == "namedBond":
-            return self.named_bond(frame)
         if kind == "enemyPreview":
-            return self.panel_hit(frame, "inspect-enemies", self.point(kind)) if screen == kind else None
+            return self.panel_result(frame, "inspect-enemies", self.point(kind)) if screen == kind else None
         if kind == "bondDetail":
             target = self.selected_bond(frame) if screen == kind else None
-            return self.panel_hit(frame, "inspect-bond", target) if target else None
-        if kind != "snapshot":
-            return None
-
-        self.snapshot = screen_snapshot(frame)
-        if self.snapshot.get("leaderBattle") and self.started_round is not None:
-            self.snapshot["round"] = self.started_round
-        if self.snapshot["screen"] == "preparation":
-            self.stage_id = frame.stage_id()
-        return hit
+            return self.panel_result(frame, "inspect-bond", target) if target else None
+        return None
 
 
 def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_ms: int, *,
                    checkpoint: str | None = None, scroll_preview: bool = False) -> None:
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkNavigation", recognition):
-        raise RuntimeError("Could not register the navigation recognizer")
     entry, terminal = ENTRIES[recognition.action]
+    if recognition.action == "inspect-enemies" and scroll_preview:
+        entry = "ArkInspectEnemiesScrolled"
+    if recognition.action == "enter-layout" and checkpoint is not None:
+        entry = {"briefing": "Entry.EnterBriefing", "squadSelection": "Entry.EnterSquad"}[checkpoint]
     override = {
         "ArkReadyOnce": {"timeout": timeout_ms},
         "ArkConfirmReady": {"timeout": timeout_ms},
         "ArkWaitBattle": {"timeout": timeout_ms},
     }
-    if recognition.action == "ready-battle":
-        override["ArkBattleStarted"] = {"enabled": True}
-    if screen_node := DRAFT_ACTIONS.get(recognition.action):
-        override["Bounty.ClickSlot"] = {"all_of": [screen_node, "Bounty.ExpectedOffer"]}
-        override["Bounty.ConfirmSlot"] = {"all_of": [screen_node, "Bounty.ExpectedConfirmation"]}
-    if scroll_preview:
-        override["ArkOpenEnemyPreview"] = {"next": ["ArkScrollEnemyPreview"]}
-        override["ArkCloseEnemyPreview"] = {"custom_recognition_param": "enemyPreviewScrolled"}
-    if recognition.action == "interrupt-match":
-        override["Interrupt.ConfirmLeave"] = {"next": ["Interrupt.ContinueToAbandon"]}
-    if recognition.action == "open-entrance":
-        override["Entry.ClickEvent"] = {"next": ["Entry.EventEntrance"]}
-    if checkpoint is not None:
-        override["Entry.SavedMatch"] = {"enabled": True}
-        override["Entry.SoloButton"] = {"expected": "^独立模拟$"}
-        override["Entry.SquadCheckpoint"] = {"enabled": True}
-        override["Entry.ClickSquadReady"] = {"enabled": False}
-        if checkpoint == "briefing":
-            override["Entry.BriefingCheckpoint"] = {"enabled": True}
-            override["Entry.ClickBriefingReady"] = {"enabled": False}
-    try:
-        job = tasker.post_task(entry, override).wait()
-        detail = job.get()
-        nodes = [node.name for node in detail.nodes] if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkNavigation")
-    last = nodes[-1] if nodes else ""
-    recognition.steps = nodes
-    failed_at = next((name for name in nodes if name in ERRORS), None)
-    if failed_at:
-        message = ERRORS[failed_at]
+    if recognition.boss_timing is not None:
+        override["ArkBossTiming"] = {"enabled": True}
+    ready_action = ReadyAction(recognition) if recognition.action in {"start-battle", "ready-battle"} else None
+    with task_recognition(tasker, "ArkNavigation", recognition, ready_action=ready_action):
+        job = run_task(tasker, entry, override)
+        steps = job.nodes
+    recognition.collect_results(steps)
+    last = job.last
+    recognition.steps = job.names
+    message = job.failure(ERRORS)
+    if message:
         if last == "ArkReturnedRest":
             message += "; returned to the preparation anchor"
         raise RuntimeError(message)
@@ -253,7 +282,7 @@ def run_navigation(tasker: Tasker, recognition: NavigationRecognition, timeout_m
     }
     if not job.succeeded or (last != terminal and not opening_stop and not battle_stop) or recognition.snapshot is None:
         if recognition.action in DRAFT_ACTIONS:
-            if recognition.bounty_target_verified:
+            if any(node.name.endswith((".ClickSlot", ".ConfirmSlot")) and node.action is not None for node in steps):
                 raise RuntimeError("Card selection did not return to the preparation anchor")
             raise RuntimeError("The card slot and ID did not match again; no input was sent")
         raise RuntimeError(f"Navigation stopped at {last or entry}")
@@ -273,13 +302,41 @@ def observe_snapshot(tasker: Tasker) -> dict:
     return recognition.snapshot
 
 
+# Regions the waits watch. CENTER_ROI avoids the countdown (top right) and the latency readout (top left). SHOP_CARDS_ROI is
+# the union of every card box in calib/slots.json shop layouts (the reward cards slide into this row).
+CENTER_ROI = (200, 120, 880, 480)
+SHOP_CARDS_ROI = (135, 520, 951, 184)
+
+
+def wait_stable(tasker: Tasker, roi, *, target=None, time_ms: int = 150, timeout_ms: int = 3000) -> float:
+    """Wait until the `target` box has not changed for `time_ms`, or until `timeout_ms`. No input is sent.
+
+    The MFW node Wait.Stable only carries post_wait_freezes, so this returns as soon as the box is still and never later
+    than timeout_ms. `target` must be explicit: MFW skips a wait_freezes that has no target box. Returns elapsed ms.
+    """
+    if target is None:
+        raise ValueError("wait_stable requires an explicit target box")
+    if time_ms <= 0 or timeout_ms <= 0:
+        raise ValueError("wait_stable times must be positive")
+    override = {"Wait.Stable": {
+        "roi": list(roi), "timeout": int(timeout_ms),
+        "post_wait_freezes": {"target": list(target), "time": int(time_ms), "rate_limit": 50, "threshold": 0.99,
+                              "timeout": int(timeout_ms)},
+    }}
+    started = time.perf_counter()
+    if not run_task(tasker, "Wait.Stable", override).succeeded:
+        raise RuntimeError("Wait.Stable did not run")
+    return (time.perf_counter() - started) * 1000
+
+
 def observe_screen(tasker: Tasker) -> LiveScreen:
     return LIVE_SCREENS.get(observe_snapshot(tasker)["screen"], "unknown")
 
 
 def enter_layout(tasker: Tasker, slots: dict, catalog: Path, before: dict, timeout_ms: int, *,
                  commander: str | None, resource_path: Path, stop_at: str | None,
-                 bond_group: int | None, commander_fallbacks: tuple[str, ...] = ()) -> dict:
+                 bond_group: int | None, commander_fallbacks: tuple[str, ...] = (),
+                 expected_groups: list[list[str]] | None = None) -> dict:
     screen = before["screen"]
     if stop_at is not None and stop_at not in ENTRY_CHECKPOINTS:
         raise ValueError("Opening checkpoint must be briefing or squadSelection")
@@ -307,7 +364,7 @@ def enter_layout(tasker: Tasker, slots: dict, catalog: Path, before: dict, timeo
     if bond_group is not None:
         if screen != "briefing":
             raise RuntimeError(f"Opening did not reach briefing; stopped on {screen}")
-        choice = choose_bond_group(tasker, Reader(catalog, slots), bond_group)
+        choice = choose_bond_group(tasker, Reader(catalog, slots), bond_group, expected_groups=expected_groups)
         result["bondChoice"] = choice["bondChoice"]
         result["steps"].extend(choice["steps"])
         screen = choice["after"]
@@ -315,7 +372,7 @@ def enter_layout(tasker: Tasker, slots: dict, catalog: Path, before: dict, timeo
         if not commander:
             raise RuntimeError("At commander selection; pass --commander with the displayed name to continue")
         result["commander"] = select_commander(tasker, slots["commander"], commander, resource_path=resource_path,
-                                               fallback_names=commander_fallbacks)
+                                               fallback_names=commander_fallbacks, catalog=catalog)
         run_navigation(tasker, recognition, timeout_ms, checkpoint=stop_at)
         result["steps"].extend(recognition.steps)
         screen = recognition.snapshot["screen"]
@@ -334,7 +391,8 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
             slot: int | None = None, bond_group: int | None = None, stop_at: str | None = None,
             battle_round: int | None = None, confirm_interrupt: bool = False,
             expected_round: int | None = None, scroll_preview: bool = False, expected_id: str | None = None,
-            commander_fallbacks: tuple[str, ...] = ()) -> dict:
+            commander_fallbacks: tuple[str, ...] = (), expected_groups: list[list[str]] | None = None,
+            boss_timing: BossTiming | None = None) -> dict:
     buttons = slots["buttons"]
     probe = NavigationRecognition(buttons, "observe", None, None)
     run_navigation(tasker, probe, timeout_ms)
@@ -388,12 +446,14 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
     if action == "enter-layout":
         return enter_layout(tasker, slots, catalog, before, timeout_ms, commander=commander,
                             resource_path=resource_path, stop_at=stop_at, bond_group=bond_group,
-                            commander_fallbacks=commander_fallbacks)
+                            commander_fallbacks=commander_fallbacks, expected_groups=expected_groups)
     if action == "wait-battle":
         if type(battle_round) is not int or battle_round < 1:
             raise ValueError("wait-battle requires a positive battle round")
         if before["screen"] in DRAFT_SCREENS | {"preparation", "matchInterrupted", "disconnect"}:
             require_return(action, {"round": battle_round}, before)
+            if boss_timing is not None:
+                boss_timing.finish(before)
             return {"startedRound": battle_round, "after": before}
         transition = before["screen"] in {"roundHud", "unknown"} and before["round"] in (
             None, battle_round, battle_round + 1)
@@ -401,8 +461,11 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
             raise RuntimeError("The current battle round does not match the requested round")
         recognition = NavigationRecognition(buttons, action, None, None)
         recognition.started_round = battle_round
+        recognition.boss_timing = boss_timing
         run_navigation(tasker, recognition, timeout_ms)
         require_return(action, {"round": battle_round}, recognition.snapshot)
+        if boss_timing is not None:
+            boss_timing.finish(recognition.snapshot)
         return {"startedRound": battle_round, "after": recognition.snapshot}
 
     if action in DRAFT_ACTIONS:
@@ -436,6 +499,7 @@ def execute(tasker: Tasker, slots: dict, action: str, catalog: Path, bond: str |
 
     reader = Reader(catalog, slots) if action in INSPECTIONS else None
     recognition = NavigationRecognition(buttons, action, bond, reader, before["round"])
+    recognition.boss_timing = boss_timing
     run_navigation(tasker, recognition, timeout_ms, scroll_preview=action == "inspect-enemies" and scroll_preview)
     after = recognition.snapshot
     if action == "open-entrance":
@@ -478,10 +542,7 @@ def main() -> None:
     parser.add_argument("--confirm-interrupt", action="store_true",
                         help="Allow the current saved simulation to settle and be removed")
     parser.add_argument("--timeout", type=float, default=95, help="Seconds to verify a later preparation round")
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
+    add_session_args(parser, catalog=CATALOG)
     args = parser.parse_args()
     if not np.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be positive and finite")
@@ -513,10 +574,7 @@ def main() -> None:
     if (args.action == "wait-battle") != (args.battle_round is not None):
         parser.error("--battle-round is required for wait-battle")
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        tasker = load_ocr(connect(args.adb, args.address), args.ocr_resource)
+        tasker = session(args.adb, args.address, args.ocr_resource).tasker
         slots = read_json(ROOT / "calib/slots.json")
         result = execute(tasker, slots, args.action, args.catalog, bond, max(1, round(args.timeout * 1000)),
                          commander=commander, resource_path=args.ocr_resource, slot=args.slot,

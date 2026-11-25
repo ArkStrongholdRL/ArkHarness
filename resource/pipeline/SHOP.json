@@ -1,13 +1,36 @@
 {
   "Shop.SetView": {"next": ["Shop.DismissOperatorDetails", "Shop.ViewVerified", "Shop.SwitchView"], "timeout": 3500},
   "Shop.DismissOperatorDetails": {
-    "recognition": "Custom", "custom_recognition": "ArkShopView", "custom_recognition_param": "dismissDetails",
-    "action": "Click", "target": [1030, 70], "post_delay": 250, "max_hit": 1,
-    "next": ["Shop.ViewVerified", "Shop.SwitchView"], "timeout": 3500
+    "recognition": "And",
+    "all_of": [
+      "Shop.DismissibleDetails",
+      "ArkRestText",
+      "Shop.ViewPreparation"
+    ],
+    "action": "Click",
+    "target": [
+      1030,
+      70
+    ],
+    "post_delay": 250,
+    "max_hit": 1,
+    "next": [
+      "Shop.ViewVerified",
+      "Shop.SwitchView"
+    ],
+    "timeout": 3500
+  },
+  "Shop.DismissibleDetails": {
+    "recognition": "Or", "any_of": ["Screen.OperatorDetailsVisible", "Shop.ConfirmLevelText"]
+  },
+  "Shop.ViewPreparation": {
+    "recognition": "Custom", "custom_recognition": "ArkShopView", "custom_recognition_param": "preparation"
   },
   "Shop.SwitchView": {
     "recognition": "Custom", "custom_recognition": "ArkShopView", "custom_recognition_param": "switch",
-    "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1, "next": ["Shop.ViewVerified"], "timeout": 3500
+    "action": "Click", "pre_delay": 200, "post_delay": 0,
+    "post_wait_freezes": {"target": [1095, 625, 180, 88], "time": 150, "rate_limit": 50, "threshold": 0.99, "timeout": 650},
+    "max_hit": 1, "next": ["Shop.ViewVerified"], "timeout": 3500
   },
   "Shop.ViewVerified": {
     "recognition": "Custom", "custom_recognition": "ArkShopView", "custom_recognition_param": "verify"
@@ -25,10 +48,14 @@
     "recognition": "Custom",
     "custom_recognition": "ArkShopBuy",
     "custom_recognition_param": "target",
-    "action": "Click", "pre_delay": 200,
+    "action": "Click",
+    "pre_delay": 200,
     "max_hit": 1,
     "post_delay": 350,
-    "next": ["Shop.BuyVerified", "Shop.ConfirmBuy"],
+    "next": [
+      "Shop.BuyVerified",
+      "Shop.ConfirmBuy"
+    ],
     "timeout": 4500,
     "rate_limit": 300
   },
@@ -36,14 +63,17 @@
     "recognition": "Custom",
     "custom_recognition": "ArkShopBuy",
     "custom_recognition_param": "confirm",
-    "action": "Click", "pre_delay": 200,
+    "action": "Click",
+    "pre_delay": 200,
     "max_hit": 1,
     "post_delay": 350,
-    "next": ["Shop.BuyVerified"],
+    "next": [
+      "Shop.BuyVerified"
+    ],
     "timeout": 4500,
     "rate_limit": 300
   },
-  "Shop.ConfirmBuyText": {"recognition": "OCR", "expected": "^确认购买$"},
+  "Shop.ConfirmBuyText": {"recognition": "OCR", "expected": "^(?:通\\s*)?确认购买$"},
   "Shop.CollapseText": {"recognition": "OCR", "roi": [1100, 630, 175, 83], "expected": "收起"},
   "Shop.BuyVerified": {
     "recognition": "Custom",
@@ -63,10 +93,14 @@
     "recognition": "Custom",
     "custom_recognition": "ArkShopControl",
     "custom_recognition_param": "target",
-    "action": "Click", "pre_delay": 200,
+    "action": "Click",
+    "pre_delay": 200,
     "max_hit": 1,
     "post_delay": 400,
-    "next": ["Shop.ControlVerified", "Shop.ConfirmLevel"],
+    "next": [
+      "Shop.ControlVerified",
+      "Shop.ConfirmLevel"
+    ],
     "timeout": 5500,
     "rate_limit": 300
   },
@@ -74,10 +108,13 @@
     "recognition": "Custom",
     "custom_recognition": "ArkShopControl",
     "custom_recognition_param": "confirm_level",
-    "action": "Click", "pre_delay": 200,
+    "action": "Click",
+    "pre_delay": 200,
     "max_hit": 1,
     "post_delay": 400,
-    "next": ["Shop.ControlVerified"],
+    "next": [
+      "Shop.ControlVerified"
+    ],
     "timeout": 5500,
     "rate_limit": 300
   },
@@ -87,6 +124,14 @@
     "custom_recognition_param": "verify"
   },
   "Shop.FreezeText": {"recognition": "OCR", "roi": [970, 434, 146, 50], "expected": "^(冻结|解冻|解除冻结)$"},
+  "Shop.FreezeDisabledColor": {
+    "recognition": "ColorMatch", "roi": [1028, 445, 12, 22], "method": 40,
+    "lower": [0, 0, 105], "upper": [179, 15, 150], "count": 220
+  },
+  "Shop.FreezeEnabledColor": {
+    "recognition": "ColorMatch", "roi": [1028, 445, 12, 22], "method": 40,
+    "lower": [93, 65, 205], "upper": [111, 200, 255], "count": 220
+  },
   "Shop.RefreshText": {"recognition": "OCR", "roi": [1116, 434, 148, 49], "expected": "^刷新$"},
   "Shop.LevelHeading": {"recognition": "OCR", "roi": [0, 550, 443, 41], "expected": "^(LEVEL|LEVE|LEV|LV)$"},
   "Shop.LevelText": {"recognition": "OCR", "roi": [0, 630, 443, 71], "expected": "^升级$"},
@@ -105,6 +150,23 @@
     "roi": [370, 584, 33, 43],
     "only_rec": true
   },
+  "Shop.LevelBadge": {
+    "recognition": "Or",
+    "any_of": ["Shop.LevelBadge.1", "Shop.LevelBadge.2", "Shop.LevelBadge.3",
+                "Shop.LevelBadge.4", "Shop.LevelBadge.5", "Shop.LevelBadge.6"]
+  },
+  "Shop.LevelBadge.1": {"recognition": "TemplateMatch", "roi": [353, 581, 68, 47],
+                        "template": ["shop-level-1-active.png", "shop-level-1-dim.png"], "threshold": 0.94},
+  "Shop.LevelBadge.2": {"recognition": "TemplateMatch", "roi": [191, 581, 68, 47],
+                        "template": ["shop-level-2-active.png", "shop-level-2-dim.png"], "threshold": 0.94},
+  "Shop.LevelBadge.3": {"recognition": "TemplateMatch", "roi": [191, 581, 68, 47],
+                        "template": ["shop-level-3-active.png", "shop-level-3-dim.png"], "threshold": 0.94},
+  "Shop.LevelBadge.4": {"recognition": "TemplateMatch", "roi": [29, 581, 68, 47],
+                        "template": ["shop-level-4-active.png", "shop-level-4-dim.png"], "threshold": 0.94},
+  "Shop.LevelBadge.5": {"recognition": "TemplateMatch", "roi": [29, 581, 68, 47],
+                        "template": "shop-level-5-dim.png", "threshold": 0.94},
+  "Shop.LevelBadge.6": {"recognition": "TemplateMatch", "roi": [29, 581, 68, 47],
+                        "template": "shop-level-6-active.png", "threshold": 0.94},
   "Screen.ShopLevelStroke": {
     "recognition": "ColorMatch",
     "method": 40,
@@ -120,16 +182,46 @@
     "recognition": "OCR",
     "roi": [374, 522, 25, 26],
     "only_rec": true,
-    "expected": "^[0-9]+$"
+    "expected": "^[0-9]+$",
+    "model": "digits"
   },
   "Screen.RefreshPrice": {
     "recognition": "OCR",
     "roi": [1181, 419, 28, 25],
     "only_rec": true,
-    "expected": "^[0-9]+$"
+    "expected": "^[0-9]+$",
+    "model": "digits"
   },
-  "Screen.ShopCardName": {"recognition": "OCR", "only_rec": true},
+  "Shop.FreeRefresh": {
+    "recognition": "OCR", "roi": [1150, 417, 92, 29], "only_rec": true,
+    "expected": "(?i)^\\s*FREE\\s*[x×]\\s*[1-9][0-9]*\\s*$"
+  },
+  "Screen.ShopCardName": {
+    "recognition": "OCR",
+    "only_rec": true,
+    "color_filter": "OCR.LightText",
+    "replace": [["^青积$", "青枳"]]
+  },
   "Screen.ShopCardTier": {"recognition": "OCR", "only_rec": true},
-  "Screen.ShopCardPrice": {"recognition": "OCR", "only_rec": true, "expected": "^[0-9]+$"},
+  "Shop.CardTierBadge": {
+    "recognition": "Or",
+    "any_of": ["Shop.CardTier.1", "Shop.CardTier.2", "Shop.CardTier.3",
+                "Shop.CardTier.4", "Shop.CardTier.5", "Shop.CardTier.6"]
+  },
+  "Shop.CardTier.1": {"recognition": "TemplateMatch", "template": "shop-card-tier-1.png", "threshold": 0.9},
+  "Shop.CardTier.2": {"recognition": "TemplateMatch", "template": "shop-card-tier-2.png", "threshold": 0.9},
+  "Shop.CardTier.3": {"recognition": "TemplateMatch", "template": "shop-card-tier-3.png", "threshold": 0.9},
+  "Shop.CardTier.4": {"recognition": "TemplateMatch", "template": "shop-card-tier-4.png", "threshold": 0.9},
+  "Shop.CardTier.5": {"recognition": "TemplateMatch", "template": "shop-card-tier-5.png", "threshold": 0.9},
+  "Shop.CardTier.6": {"recognition": "TemplateMatch", "template": "shop-card-tier-6.png", "threshold": 0.9},
+  "Shop.PortraitLit": {
+    "recognition": "ColorMatch", "method": 40,
+    "lower": [15, 125, 142], "upper": [43, 255, 255], "count": 32
+  },
+  "Screen.ShopCardPrice": {"recognition": "OCR", "only_rec": true, "expected": "^[0-9]+$", "model": "digits"},
+  "Screen.ShopRewardBadge": {
+    "recognition": "ColorMatch", "method": 40,
+    "lower": [67, 70, 125], "upper": [104, 255, 255], "count": 20
+  },
   "Screen.ShopSold": {"recognition": "OCR", "only_rec": true, "expected": "NO\\s*INFO"}
 }

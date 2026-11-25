@@ -7,5 +7,29 @@
     "recognition": "Custom",
     "custom_recognition": "ArkReadScreen"
   },
+  "Screen.Scene": {
+    "recognition": "Or",
+    "any_of": ["Screen.BondPanel", "Screen.EnemyPanel", "Screen.Drag", "Bounty.Screen",
+      "Supply.Screen", "Tactic.Screen", "Screen.CommandDetails", "Screen.ReadyIcon",
+      "Battle.Settlement", "Battle.Active", "Battle.LeaderActive"]
+  },
+  "Screen.CommandDetails": {
+    "recognition": "And", "all_of": ["Screen.ReadyIcon", "Command.Panel"]
+  },
+  "Screen.Lifecycle": {
+    "recognition": "Or",
+    "any_of": ["Recovery.Notice", "Lifecycle.Title", "Lifecycle.GameHome", "Lifecycle.Entrance",
+      "Lifecycle.Difficulty", "Lifecycle.Briefing", "Lifecycle.Strategy", "Lifecycle.Squad",
+      "Lifecycle.LeaveConfirm", "Lifecycle.AbandonConfirm", "Lifecycle.Interrupted"]
+  },
+  "Screen.OperatorDetailsVisible": {
+    "recognition": "Or", "any_of": ["Screen.OperatorDetails", "HandSale.Button", "Withdraw.Icon"]
+  },
+  "Screen.MatchInfoPanel": {
+    "recognition": "And", "all_of": ["Screen.MatchInfoCross", "ArkMatchInfoTitle"]
+  },
+  "Screen.ReadyAvailable": {
+    "recognition": "And", "all_of": ["Screen.ReadyColor", "ArkReadyText"]
+  },
   "Screen.FullText": {"recognition": "OCR"}
 }

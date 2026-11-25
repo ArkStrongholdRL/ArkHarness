@@ -16,6 +16,10 @@
   },
   "shop": {
     "capacity": 10,
+    "portraits": {
+      "chess": [10, 548, 60, 70],
+      "item": [-38, 548, 76, 92]
+    },
     "layoutAliases": {"3": "2", "5": "4", "6": "4"},
     "layouts": {
       "1": [

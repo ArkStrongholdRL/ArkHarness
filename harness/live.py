@@ -33,7 +33,10 @@ from pathlib import Path
 import numpy as np
 
 from .catalog import CATALOG as CATALOG_JSON, load
-from .checkpoint import GameState, load_checkpoint, restore_track, save_checkpoint
+from .bond_derive import (can_derive_bonds, derive_bonds, disabled_addon_bonds, disabled_bonds_from_choice,
+                          fill_unread_bonds, merge_disabled_bonds)
+from .shop_derive import refresh_price, upgrade_price
+from .checkpoint import GameState, load_checkpoint, restore_track, save_checkpoint, snapshot_holdings
 from .encode.encoder import ACT, HAND, OWNED, TEMP, Ctx, Encoder, action_name
 from .encode.plan import Plan
 from .execution import device_action, mask_unverified_prep_actions, recover_action
@@ -42,13 +45,17 @@ from .prep_holdings import ITEM_GRANTS, prep_read_plan, scheduled_rack_slot
 from .rules import Rules
 from .sidecar import Sidecar, SidecarError
 from .track import Track
+from .wave import resolve_leader_names
 
 ROOT = Path(__file__).resolve().parent.parent
+LIVE_CKPT = ROOT / "models" / "P14-model-81M.pt"
 LOGS = ROOT / "logs" / "live"
 TIMEOUT_MS = 180_000
 UNKNOWN_RETRIES = 4
 LIVE_MODES = {f"mode_single_{level}" for level in range(10, 21)}
 INCOME_DOLL_EFFECTS = {"gain_coin_when_round_start", "use_equip_gain_coin_when_next_round_start"}
+PROJECTION_NEXT_ROUND = "equip_round_start_upgrade_char"
+PROJECTION_IMMEDIATE = "use_equip_upgrade_char"
 EQUIPMENT_REWARDS = {
     "use_equip_spe_goods_first_bond": "chess",
     "use_equip_spe_goods_equip": "item",
@@ -81,9 +88,16 @@ class Retry(RuntimeError):
 
 
 RETRY_LIMIT = 2
+# The match transition (end, briefing, squad, strategy) and the battle waits: a failed executor there gets its own budget,
+# per game, so the preparation budget ("executor") is never spent on them.
+BOUNDARY_RETRY_LIMIT = 3
+BOUNDARY_SCREENS = ("matchEnded", "briefing", "squadSelection", "strategySelection")
+MATCH_START_SCREENS = ("briefing", "squadSelection", "strategySelection")
 
 
 class Live:
+    _match_start_owed = False  # the match end was logged and the next match start has not completed yet
+
     def __init__(self, a):
         self.a = a
         self.mode = a.mode
@@ -96,7 +110,8 @@ class Live:
         saved_policy = Path(self.resume_doc.get("policy", CKPT)).resolve() if self.resume_doc else None
         if requested is not None and saved_policy is not None and requested != saved_policy:
             raise Stop(f"Saved match uses {saved_policy}; omit --policy to resume with it")
-        self.policy = Policy(ckpt=requested or saved_policy or CKPT.resolve(), threads=4)
+        default_policy = LIVE_CKPT if LIVE_CKPT.is_file() else CKPT.resolve()
+        self.policy = Policy(ckpt=requested or saved_policy or default_policy, threads=4)
         self.check_policy_width()
         self.rules = Rules(self.gd)
         self.track = Track(self.gd, legacy_equip_snapshot=False)
@@ -107,26 +122,22 @@ class Live:
         self._retries: dict = {}  # (round, key) -> soft failures so far
         self._shop_open = False  # the expanded shop was verified and nothing since may have collapsed it
         self._prep_chain = False  # the last iteration acted in preparation, so the next one may skip the observe
+        self._refreshed_shop: tuple[int, int] | None = None
         self._connect()
         self.sc = Sidecar()
 
     # ---------- device ----------
     def _connect(self):
         from maa.define import MaaAdbInputMethodEnum
-        from maa.tasker import Tasker
 
-        from .screen.capture import ADB_ADDRESS, ADB_PATH, MUMU_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
-        from .screen.read import CATALOG, Reader, read_json
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
+        from .screen.capture import ADB_ADDRESS, ADB_PATH, MUMU_PATH, session
+        from .screen.read import CATALOG, read_json
         self.catalog_dir = CATALOG
-        self.controller = connect(self.a.adb or ADB_PATH, self.a.adb_address or ADB_ADDRESS,
-                                  input_methods=MaaAdbInputMethodEnum.Maatouch,
-                                  mumu=None if self.a.no_mumu else MUMU_PATH)
-        self.tasker = load_ocr(self.controller, OCR_RESOURCE)
-        self.slots = read_json(ROOT / "calib/slots.json")
-        self.reader = Reader(CATALOG, self.slots)
+        screen = session(self.a.adb or ADB_PATH, self.a.adb_address or ADB_ADDRESS,
+                         input_methods=MaaAdbInputMethodEnum.Maatouch,
+                         mumu=None if self.a.no_mumu else MUMU_PATH, catalog=CATALOG)
+        self.controller, self.tasker, self.reader = screen.controller, screen.tasker, screen.reader
+        self.slots = self.reader.slots
         self.stages = read_json(CATALOG / "stages.json")
         if self.a.stage:  # the terrain template is covered once operators stand on the board; name the map by hand
             if self.a.stage not in self.stages:
@@ -194,6 +205,8 @@ class Live:
         saved = dict(doc["state"])
         if pager := saved.pop("pending_pager", None):
             saved.setdefault("pending_equipment_reward", {**pager, "kind": "chess", "effect": "use_equip_spe_goods_first_bond"})
+        if stage := getattr(self.a, "stage", None):
+            saved["stage_id"] = stage
         self.state = GameState(**saved)
         self.reader.stage_hint = self.state.stage_id
         self.reader.deploy_cap_floor = self.state.deploy_cap_floor
@@ -223,17 +236,22 @@ class Live:
 
     # ---------- screen ----------
     def observe(self):
-        from .screen.flow import observe_snapshot
+        from .screen.flow import CENTER_ROI, observe_snapshot, wait_stable
         from .screen.state import LIVE_SCREENS
         for k in range(UNKNOWN_RETRIES):
             self._observation = observe_snapshot(self.tasker)
             if self._observation["screen"] in LIVE_SCREENS:
                 return LIVE_SCREENS[self._observation["screen"]]
-            time.sleep(1.5 * (k + 1))
+            # Back off until the centre of the frame is still (at most the old fixed 1.5 * (k + 1) s), then read again.
+            try:
+                wait_stable(self.tasker, CENTER_ROI, target=CENTER_ROI, timeout_ms=int(1500 * (k + 1)))
+            except RuntimeError:  # the wait node did not run: keep the fixed backoff
+                time.sleep(1.5 * (k + 1))
         return "unknown"
 
     def read(self):
         from .screen.read import read_screen
+        self.reader.shop_level_hint = None if self.state.shop_level_uncertain else self.state.shop_level
         state = read_screen(self.tasker, self.reader)
         if stage := state["match"].get("stageId"):
             self.state.stage_id = self.reader.stage_hint = stage
@@ -241,11 +259,22 @@ class Live:
             # The terrain template is covered by operators standing on it; the map cannot change inside a match.
             state["match"]["stageId"] = self.state.stage_id
         own = state["self"]
+        shop = own["shop"]
+        if self.reader.shop_level_hint is None and shop.get("slots") and type(shop.get("level")) is int:
+            level, rnd = shop["level"], state["match"]["round"]
+            if self.state.shop_level_uncertain and self.state.shop_level is not None and level not in (
+                self.state.shop_level, self.state.shop_level + 1,
+            ):
+                raise RuntimeError(f"Unexpected shop level {level} after an interrupted upgrade from {self.state.shop_level}")
+            if self.state.shop_level_uncertain and self.state.shop_level is not None and self.state.shop_level != level:
+                self.state.shop_level_round = rnd
+            self.state.shop_level = self.reader.shop_level_hint = level
+            self.state.shop_level_uncertain = False
         if (self.state.tracked_deploy_count_round is not None
                 and self.state.tracked_deploy_count_round == state["match"]["round"]
                 and "board" not in self.state.dirty_areas and own["deployCount"] is not None):
             remaining = own["deployCap"] - own["deployCount"]
-            own["deployCount"] = len(self.track.board)
+            own["deployCount"] = self.track.deployed_chess_count()
             own["deployCap"] = own["deployCount"] + remaining
         return state
 
@@ -295,7 +324,7 @@ class Live:
         return result
 
     # ---------- state assembly ----------
-    def screen_state(self, s: dict, *, include_overflow: bool = False) -> dict:
+    def screen_state(self, s: dict, *, include_overflow: bool = False, preparation: bool = False) -> dict:
         """The ScreenState the policy sees: the screen read + bookkeeping (holdings, band, group) + rebuilt preview."""
         st = json.loads(json.dumps(s))
         S, M = st["self"], st["match"]
@@ -307,16 +336,36 @@ class Live:
         S["playerId"] = S.get("playerId") or "ai_0"
         if self.state.bond_choice:
             M["bondChoice"] = self.state.bond_choice
+        derived_disabled = disabled_bonds_from_choice(M.get("bondChoice"))
+        if derived_disabled is not None and not M.get("disabledBonds"):
+            M["disabledBonds"] = derived_disabled  # solo: the group not picked; the screen's own reading wins
+        if self.state.addon_disabled_bonds:
+            M["disabledBonds"] = merge_disabled_bonds(M.get("disabledBonds"), self.state.addon_disabled_bonds)
         M["bossId"] = M.get("bossId") or self.state.boss_id
         M["hiddenBossId"] = M.get("hiddenBossId") or self.state.hidden_boss_id
         M["spRound"] = bool(M.get("spRound"))
         S.setdefault("personalChoice", None)
+        shop = S["shop"]
+        if shop.get("upgradePrice") is None:  # unread: the mode's price table at the level's history (shop_derive)
+            shop["upgradePrice"] = upgrade_price(self.gd, shop.get("level"), self.state.shop_level_round, M.get("round"))
+        if shop.get("refreshPrice") is None:
+            shop["refreshPrice"] = refresh_price(self.gd, self.state.tactic_free_refreshes)
+        if shop.get("frozen") is not None:  # the shop freeze holds every unsold card (engine setShopSlot)
+            for slot in shop.get("slots") or []:
+                if slot and not slot.get("sold") and slot.get("frozen") is None:
+                    slot["frozen"] = shop["frozen"]
+        if preparation and S.get("canReady") is None and M.get("round") is not None:
+            S["canReady"] = True  # the preparation phase: the engine's canReady, when the screen did not read it
         if S["shop"].get("refreshPrice") == 0 and self.state.tactic_free_refreshes:
             S["shop"]["freeRefreshes"] = self.state.tactic_free_refreshes
         if self.state.preview is not None and self.state.preview_round == M.get("round"):
             S["nextEnemies"] = [{k: e[k] for k in ("enemyKey", "count", "fly", "elite", "boss", "gate")} for e in self.state.preview]
         S["nextEnemies"] = S.get("nextEnemies") or []
         S["bounties"] = self.track.active_bounties(M["round"]) if M.get("round") else []
+        # Bond counts the screen did not read come from the board and hand (engine truth in bonds_truth.mjs). A DIY
+        # operator's bonds are hidden from the catalog and the screen, so the whole block then keeps the screen's reading.
+        if can_derive_bonds(S["board"], list(S["hand"]) + list(S["temp"]), self.gd):
+            S["bonds"] = fill_unread_bonds(S["bonds"], derive_bonds(S["board"], self.gd, S["hand"]))
         S["botSelf"] = self.state.bot_self
         return st
 
@@ -329,21 +378,24 @@ class Live:
         bounties = self.track.active_bounties(rnd)
         r = self.flow("inspect-enemies", scroll_preview=leader or bool(bounties))
         kinds = r.get("kinds") or []
-        if r.get("ambiguousEnemyNames"):
-            raise Stop(f"ambiguous enemy names in the preview: {r['ambiguousEnemyNames']}")
+        ambiguous = r.get("ambiguousEnemyNames") or {}
         panel_match = (r.get("inspection") or {}).get("match", {})
         if leader:
             hidden = rnd == self.gd.hidden_round
             key = "hiddenBossId" if hidden else "bossId"
             boss_id = panel_match.get(key) or (self.state.hidden_boss_id if hidden else self.state.boss_id)
+            kinds, ambiguous, boss_id = resolve_leader_names(self.gd, rnd, kinds, ambiguous, boss_id)
+        else:
+            boss_id = self.state.boss_id or s["match"].get("bossId")
+        if ambiguous:
+            raise Stop(f"ambiguous enemy names in the preview: {ambiguous}")
+        if leader:
             if not boss_id:
                 raise Stop("The leader name was not verified in the enemy preview")
             if hidden:
                 self.state.hidden_boss_id = boss_id
             else:
                 self.state.boss_id = boss_id
-        else:
-            boss_id = self.state.boss_id or s["match"].get("bossId")
         state = {"config": {"modeId": self.gd.mode_id}}
         inputs = {"round": rnd, "bossId": boss_id, "bounties": bounties,
                   "factions": s["match"].get("factions")}
@@ -384,10 +436,15 @@ class Live:
         return {p.uid for p in [*self.track.hand, *self.track.temp, *self.track.board.values()] if p is not None}
 
     def decide(self, st, kind, *, only: slice | None = None):
+        failed_layers = [b["bondId"] for b in (st["self"].get("bonds") or []) if b.get("layerReadFailed")]
+        if failed_layers:
+            self.soft_fail("bond-layers", f"Unverified bond layers: {', '.join(failed_layers)}")
+        self._retries.pop((self.state.round, "bond-layers"), None)
         t0 = time.perf_counter()
         obs, mask, ctx = self.encode(st, kind)
+        masked = []
         if kind == "prep" and only is None:
-            mask_unverified_prep_actions(mask, st["self"], self.state.blocked_board_sales)
+            masked = mask_unverified_prep_actions(mask, st["self"], self.state.blocked_board_sales)
         if only is not None:
             allowed = np.zeros_like(mask)
             allowed[only] = mask[only]
@@ -397,7 +454,7 @@ class Live:
         a = int(self.policy.act(obs[None], mask[None])[0])
         legal = [action_name(i) for i in np.nonzero(mask)[0]]
         row = {"screen": kind, "round": st["match"]["round"], "decision": kind, "action": action_name(a),
-               "legal": legal, "obsHash": hashlib.sha1(obs.tobytes()).hexdigest()[:12], "ctx": ctx.__dict__,
+               "legal": legal, "obsHash": hashlib.sha1(obs.tobytes()).hexdigest()[:12], "ctx": {**ctx.__dict__, "masked": masked},
                "state": st, "inferMs": round((time.perf_counter() - t0) * 1000, 1)}
         return a, row
 
@@ -420,12 +477,14 @@ class Live:
             raise Stop(f"briefing groups not read: {b}")
         cfg = {"modeId": self.gd.mode_id, "difficulty": self.gd.difficulty, "lastRound": self.gd.last_round,
                "bossRound": self.gd.boss_round, "hiddenRound": self.gd.hidden_round}
-        s = {"config": cfg, "match": {"round": 0, "disabledBonds": b.get("disabledBonds") or [], "bossId": b.get("bossId"),
+        addon_off = disabled_addon_bonds(b.get("enabledAddonBonds"), self.gd)
+        s = {"config": cfg, "match": {"round": 0, "disabledBonds": merge_disabled_bonds(b.get("disabledBonds"), addon_off),
+                                     "bossId": b.get("bossId"),
                                      "bondChoice": {"groups": groups, "picked": None}}, "self": {"hand": [], "temp": [], "board": [], "bonds": []}}
-        group = self.rules.bond_group(s)
+        opening = self.opening_bond_choice(s, b.get("previewSelected"))
+        group = opening["group"]
         s["match"]["bondChoice"]["picked"] = group
-        outside_groups = set(s["match"]["disabledBonds"]) - set(groups[0]) - set(groups[1])
-        s["match"]["disabledBonds"] = sorted(outside_groups | set(groups[1 - group]))
+        s["match"]["disabledBonds"] = opening["disabledBonds"]
         bw = self.rules.band_weights(s)
         band = bw.get("forced") or self.rules.band_pick(bw, self.rng)
         weights = dict(bw["pairs"])
@@ -440,21 +499,28 @@ class Live:
             name = next(iter(passive), None)
         if not name:
             raise Stop("No catalog commander is available")
-        r = self.flow("enter-layout", bond_group=group, commander=name,
+        r = self.flow("enter-layout", bond_group=group, expected_groups=groups, commander=name,
                       commander_fallbacks=tuple(passive) if self.mode == "auto" else ())
         selected = r["commander"]["commander"]
         if selected != name or not band:
             band = passive[selected]
         game = max((index for index, _ in self.game_checkpoints()), default=-1) + 1
         self.state = GameState(game=game, band_id=band, bond_choice={"groups": groups, "picked": group},
+                               addon_disabled_bonds=addon_off, shop_level=1, shop_level_round=1,
                                lp0=self.gd.start_lp(band), boss_id=b.get("bossId"), mode_id=self.gd.mode_id)
         self.reader.stage_hint = None
         self.reader.deploy_cap_floor = 0
         self.reader.reward_kind_hint = None
         self.track = Track(self.gd, legacy_equip_snapshot=False)
-        self.log({"screen": "briefing", "decision": "match start", "action": {"group": group, "band": band, "weights": bw},
+        self.log({"screen": "briefing", "decision": "match start",
+                  "action": {"group": group, "priorityBond": opening["bond"], "band": band, "weights": bw,
+                             "disabledAddon": addon_off},
                   "result": r})
         self.save()
+        self._match_start_owed = False
+
+    def opening_bond_choice(self, state, highlighted):
+        return self.rules.opening_bond_choice(state, highlighted)
 
     # ---------- combat drafts ----------
     def draft(self, *, tactic=False):
@@ -467,6 +533,7 @@ class Live:
             if self.state.round is None:
                 raise Stop(f"The {kind} draft covers the round HUD and the previous round is unknown")
             s["match"]["round"] = self.state.round + 1
+        self.apply_round_promotions(s["match"]["round"])
         s["match"]["stageId"] = self.state.stage_id
         st = self.screen_state(s)
         cards = (st["match"].get("sp") or {}).get("cards") or []
@@ -514,6 +581,7 @@ class Live:
             rnd = self.state.round + 1
         if rnd is None:
             raise Stop("The supply draft covers the round HUD and no previous round is saved")
+        self.apply_round_promotions(rnd)
         offer = max(offers, key=lambda card: (
             not (card["kind"] or "").startswith("consume_on_equip"), card["tier"] or 0, -card["idx"],
         ))
@@ -650,6 +718,14 @@ class Live:
             layout.setdefault(tuple(step["target"]), (self.name(step["id"]), None))
         return layout
 
+    def apply_round_promotions(self, rnd):
+        if type(rnd) is not int:
+            return
+        promotions = self.track.apply_due_promotions(rnd)
+        if promotions:
+            self.save()
+            self.log({"screen": "preparation", "round": rnd, "decision": "Doctor Projection", "result": promotions})
+
     def refresh_holdings(self, s, board):
         """Carry the ledger into prep and read only areas affected by unknown changes."""
         from .screen.holdings import reconcile_holdings, scan_holdings
@@ -671,8 +747,9 @@ class Live:
                 if scheduled is not None:
                     rack_slots = [scheduled[0]]
             layout = self.board_ledger(rnd) if "board" in plan else None
+            known_summons = tuple(i for i, p in enumerate(self.track.hand) if p and p.kind == "token")
             scan = scan_holdings(self.tasker, self.reader, board, areas=set(plan), rack_slots=rack_slots,
-                                 known_layout=layout)
+                                 known_layout=layout, known_summons=known_summons)
             if scheduled is not None:
                 observed = scan["temp"][0]
                 if observed.get("id") != scheduled[1]:
@@ -716,7 +793,7 @@ class Live:
         cmd = self.rules.command_start(st)
         if cmd and "effectId" in cmd:
             raise Unsupported(f"prep-start command {cmd['effectId']} (active command executor not wired)")
-        if self.acting() and not s["self"]["shop"].get("rewardOffer"):
+        if self.acting() and not any(s["self"]["shop"].get(key) for key in ("rewardOffer", "rewardPending")):
             for operation in self.rules.pager(st):
                 carrier = self.track._loc_by_uid(operation["carrier"])
                 if carrier and carrier["area"] == "board":
@@ -729,6 +806,28 @@ class Live:
                   "result": {**holdings, "botSelf": self.state.bot_self}})
         self.save()
 
+    def recover_preparation_layout(self, s):
+        from .layout_recovery import recover_layout_batch, recover_layout_step
+
+        step, baseline = self.state.layout_step, self.state.layout_before
+        rnd, stage = s["match"]["round"], s["match"]["stageId"]
+        count = s["self"].get("deployCount")
+        board = self.board_calibration(stage)
+        pending = step if step and "uid" in step else None
+        if baseline is not None and ("board" in self.state.dirty_areas
+                                     or count != self.track.deployed_chess_count()):
+            result = recover_layout_batch(self.tasker, self.reader, board, self.track, baseline, s, pending)
+            decision = "layout recovery"
+        elif pending:
+            result = recover_layout_step(self.tasker, self.reader, board, self.track, pending, s)
+            decision = "layout step recovery"
+        else:
+            result = None
+        self.state.layout_step = self.state.layout_before = None
+        self.save()
+        if result is not None:
+            self.log({"screen": "preparation", "round": rnd, "decision": decision, "result": result})
+
     def prep(self):
         if not self.can_inspect_panels():
             raise Stop("Full preparation input requires opening the holdings and enemy panels")
@@ -736,27 +835,38 @@ class Live:
         chained, self._prep_chain = self._prep_chain, False
         shop_view = None
         if not self._shop_open:
+            if (self.acting() and self.state.round is not None and "temp" in self.state.dirty_areas
+                    and {"board", "hand"}.intersection(self.state.dirty_areas)):
+                from .screen.equip_choice import cancel_equipment_replacement
+                if cancel_equipment_replacement(self.tasker, self.state.round):
+                    self.log({"screen": "preparation", "round": self.state.round,
+                              "decision": "equipment replacement cancelled on recovery"})
             shop_view = set_shop_open(self.tasker, True)
             self._shop_open = True
         s = self.read()
         rnd = s["match"]["round"]
-        if chained and (rnd is None or rnd != self.state.round or s["self"].get("funds") is None
-                        or s["self"]["shop"].get("refreshPrice") is None):
+        if chained and (rnd is None or rnd != self.state.round or s["self"].get("funds") is None):
             self._shop_open = False  # not provably the same expanded preparation: observe again, no input sent
             return
         if shop_view is not None and rnd != shop_view["after"]["round"]:
             self.soft_fail("round", "the preparation round changed while opening the shop")
         self.state.round = rnd
         self.use_mode(s["config"].get("modeId"))
-        step = self.state.layout_step
-        if step and "uid" in step:
-            from .layout_recovery import recover_layout_step
-
-            result = recover_layout_step(self.tasker, self.reader, self.board_calibration(s["match"]["stageId"]),
-                                         self.track, step, s)
-            self.state.layout_step = None
-            self.save()
-            self.log({"screen": "preparation", "round": rnd, "decision": "layout step recovery", "result": result})
+        if s["self"]["shop"].get("levelPreview"):
+            if not self.acting() or not self.state.shop_level_uncertain:
+                self.soft_fail("shop-level", "A shop upgrade preview is open without a saved upgrade to recover")
+            self.reader.shop_level_hint = self.state.shop_level
+            with device_action(self.state, self.save, "level"):
+                result = self.execute_action(ACT["LEVEL"], s)
+            self.log({"screen": "prep", "round": rnd, "decision": "shop level recovery", "result": result})
+            return
+        self.apply_round_promotions(rnd)
+        if self.state.layout_step or self.state.layout_before:
+            self.recover_preparation_layout(s)
+        if (self.state.prep_round == rnd and "board" not in self.state.dirty_areas
+                and type(s["self"].get("deployCount")) is int
+                and s["self"]["deployCount"] != self.track.deployed_chess_count()):
+            raise Stop("Deployment count differs from the saved board and the affected layout steps are missing")
         if getattr(self.a, "stop_at_leader_prep", False) and rnd in (self.gd.boss_round, self.gd.hidden_round):
             set_shop_open(self.tasker, False)
             self.save()
@@ -766,7 +876,7 @@ class Live:
         if self.state.pending_equipment_reward and self.acting():
             self.finish_reward(s)
             s = self.read()
-        if s["self"]["shop"].get("rewardOffer"):
+        if s["self"]["shop"].get("rewardOffer") or s["self"]["shop"].get("rewardPending"):
             self.finish_reward(s)
             if not self.acting() and not self.a.once:
                 return self.wait_change("preparation", rnd)
@@ -775,9 +885,10 @@ class Live:
             self.verify_board_merges(s)
             s = self.read()
         if rnd in (self.gd.boss_round, self.gd.hidden_round):
-            calibration = self.leader_calibration(s["match"]["stageId"])
+            stage = s["match"]["stageId"]
+            calibration = self.leader_calibration(stage)
             if not calibration or not calibration["views"].get("drag"):
-                return self.prep_uncalibrated_leader(s)
+                raise Stop(f"Round {rnd}: missing leader drag calibration for {stage}")
         if self.state.lp0 is None:
             self.state.band_id = self.state.band_id or self.command_band()
             self.state.lp0 = self.gd.start_lp(self.state.band_id)
@@ -796,7 +907,8 @@ class Live:
             if self.state.dirty_areas:
                 return
             s = self.read()
-        st = self.screen_state(s)
+        self.verify_refreshed_shop(s)
+        st = self.screen_state(s, preparation=True)
         a, row = self.decide(st, "prep")
         if not self.acting():
             self.log({**row, "result": "observe: not executed"})
@@ -820,6 +932,21 @@ class Live:
         self.log({**row, "result": receipt})
         self._prep_chain = True
 
+    def verify_refreshed_shop(self, s):
+        if self._refreshed_shop is None:
+            return
+        rnd = s["match"]["round"]
+        if self._refreshed_shop == (self.state.game, rnd):
+            slots = s["self"]["shop"]["slots"]
+            if not slots:
+                self.soft_fail("refresh-slots", "Shop slots could not be read after refresh")
+            unread = [i for i, card in enumerate(slots, 1) if card is None]
+            sold = [i for i, card in enumerate(slots, 1) if card is not None and card["sold"]]
+            if unread or sold:
+                self.soft_fail("refresh-slots", f"Unexpected shop slots after refresh: unread={unread}, sold={sold}")
+        self._retries.pop((rnd, "refresh-slots"), None)
+        self._refreshed_shop = None
+
     def command_band(self):
         from .screen.command import inspect_command
         c = inspect_command(self.tasker, self.catalog_dir)
@@ -838,15 +965,15 @@ class Live:
         return rec.get("name") or pid
 
     def sell_owned(self, p, area, index, stage_id, round_number):
-        price = (self.gd.chess(p["id"]) or {}).get("sellPrice")
         if area == "hand":
             from .screen.hand_sale import sell_hand
-            return sell_hand(self.tasker, self.slots, index, self.name(p["id"]), expected_price=price)
+            self._shop_open = False
+            return sell_hand(self.tasker, self.slots, index, self.name(p["id"]), by_balance=True)
         if area == "board":
             from .screen.sell import sell_board
+            self._shop_open = False
             return sell_board(self.tasker, self.slots, self.board_calibration(stage_id), self.name(p["id"]),
-                              p["row"], p["col"], expected_price=price, expected_round=round_number,
-                              stage_confirmed=True)
+                              p["row"], p["col"], expected_round=round_number, stage_confirmed=True, by_balance=True)
         raise Unsupported(f"operator {p['uid']} has no verified sale position")
 
     def resolve_visible(self, operations, round_number, stage_id):
@@ -883,11 +1010,15 @@ class Live:
                     receipt = self.sell_owned(p, area, index, stage_id, round_number)
                     if not self.track._sell(index):
                         raise Stop(f"sale completed but bookkeeping rejected UID {uid}")
+                    if p.get("items"):
+                        self.mark_holdings_dirty("temp")
                     if area == "board":
                         self.state.tracked_deploy_count_round = round_number
             else:
                 raise Unsupported(f"unsupported visible overflow action {operation} for UID {uid}")
             receipts.append({"op": operation, "uid": uid, "receipt": receipt})
+            if self.state.dirty_areas:
+                break
         return receipts
 
     def execute_action(self, a, st):
@@ -923,6 +1054,8 @@ class Live:
             self.state.sold_bases.append(self.gd.base_id_of(p["id"]))
             if not self.track.apply(a, st):
                 r = self.uncertain_receipt(r, a, st)
+            if p.get("items"):
+                self.mark_holdings_dirty("temp")
             if area == "board":
                 self.state.tracked_deploy_count_round = rnd
             return r
@@ -930,8 +1063,14 @@ class Live:
             r = shop.change_shop(self.tasker, self.reader, {ACT["REFRESH"]: "refresh", ACT["LEVEL"]: "level", ACT["FREEZE"]: "freeze"}[a],
                                  frozen=True if a == ACT["FREEZE"] else None)
             self.track.apply(a, st)
-            if a == ACT["REFRESH"] and r["before"]["funds"] == r["after"]["funds"]:
-                self.state.tactic_free_refreshes = max(self.state.tactic_free_refreshes - 1, 0)
+            if a == ACT["LEVEL"] and r["clicked"]:
+                self.state.shop_level = self.reader.shop_level_hint = r["after"]["level"]
+                self.state.shop_level_uncertain = False
+                self.state.shop_level_round = r["after"]["round"]  # verified receipt: level + 1 in this round
+            if a == ACT["REFRESH"] and r["clicked"]:
+                self._refreshed_shop = (self.state.game, rnd)
+                if r["before"]["funds"] == r["after"]["funds"]:
+                    self.state.tactic_free_refreshes = max(self.state.tactic_free_refreshes - 1, 0)
             return r
         if ACT["REWARD"] <= a < ACT["PERSONAL"]:
             raise Unsupported("reward pick (read / select chain not wired)")
@@ -959,7 +1098,7 @@ class Live:
         return True
 
     def apply_equipment(self, operation, board, rnd):
-        from .screen.equip import equipment_funds_match, equip_to_board, equip_to_hand, verify_rack_source
+        from .screen.equip import equipment_funds_match, equip_to_board, equip_to_hand, verify_equipment_receipt
         from .screen.equip_choice import choose_equipment_dialog
 
         item_uid, target_uid = operation["item"], operation["target"]
@@ -979,6 +1118,10 @@ class Live:
         kind = record.get("kind") or ""
         params = record.get("params") or {}
         effect = next((b.get("key") for b in record.get("buffs") or []), None)
+        projection = effect in {PROJECTION_NEXT_ROUND, PROJECTION_IMMEDIATE}
+        if projection and (carrier.kind != "chess" or self.gd.is_golden(carrier.id)
+                           or not self.gd.golden_id_of(carrier.id)):
+            raise Unsupported("Doctor Projection requires an operator that can be promoted")
         reward_kind = EQUIPMENT_REWARDS.get(effect)
         round_income = self.rules.effect_key(item.id) in INCOME_DOLL_EFFECTS
         gain_range = None
@@ -986,13 +1129,15 @@ class Live:
             gain_range = (params["min"], params["max"])
         elif effect == "equip_destory_gain_coin":
             gain_range = (max(params.get("value", 0), 0), None)
-        consumes = bool(reward_kind or round_income or gain_range or effect in EQUIPMENT_MUTATIONS)
-        if kind.startswith("consume_on_equip") and not consumes:
+        consumes = bool(reward_kind or round_income or gain_range or effect in EQUIPMENT_MUTATIONS
+                        or effect == PROJECTION_IMMEDIATE)
+        if kind.startswith("consume_on_equip") and not (consumes or projection):
             raise Unsupported(f"equipment effect for {name}")
         if effect == "equip_tier_recr_gift" and (self.gd.chess(carrier.id) or {}).get("chessType") == "DIY":
             raise Unsupported("Beacon cannot be equipped to a custom operator")
         dirty = EQUIPMENT_MUTATIONS.get(effect, ())
-        expected_gain = 0 if consumes and not reward_kind and gain_range is None else None
+        promotion_round = rnd + 1 if effect == PROJECTION_NEXT_ROUND else None
+        expected_gain = 0 if (consumes or projection) and not reward_kind and gain_range is None else None
         if gain_range and gain_range[0] == gain_range[1] and gain_range[0] > 0:
             expected_gain, gain_range = gain_range[0], None
         areas = tuple(sorted({"temp", target["area"], *dirty}))
@@ -1009,13 +1154,14 @@ class Live:
                                         expected_gain=expected_gain, gain_range=gain_range)
             if replace:
                 choice = choose_equipment_dialog(self.tasker, ("替换装备", "装备替换", "请选择要替换的装备"),
-                                                 {self.name(replace.id): replace.id}, rnd)
+                                                 {self.name(replace.id): replace.id}, rnd,
+                                                 replace_on=self.name(carrier.id))
                 receipt["replaced"] = replace.id
                 if not reward_kind:
                     receipt["after"] = {key: choice[key] for key in ("round", "funds")}
                     if not equipment_funds_match(choice["funds"] - receipt["before"]["funds"], expected_gain, gain_range):
                         raise RuntimeError("Equipment replacement did not produce the expected funds change")
-                    verify_rack_source(self.tasker, self.reader, receipt)
+                    verify_equipment_receipt(self.tasker, self.reader, receipt)
                 if consumes:
                     carrier.items.remove(replace)
             if reward_kind:
@@ -1024,15 +1170,20 @@ class Live:
                 self.reader.reward_kind_hint = None if reward_kind == "command" else reward_kind
             elif consumes:
                 if not self.track.destroy(item_uid):
-                    self.mark_holdings_dirty("temp")
+                    self.mark_holdings_dirty(*(areas if projection else ("temp",)))
+                elif effect == PROJECTION_IMMEDIATE:
+                    receipt["promotedTo"] = self.track.promote(carrier)
                 if effect == "equip_use_deploy":
                     self.state.deploy_cap_floor = self.reader.deploy_cap_floor = max(
                         self.state.deploy_cap_floor, params.get("count", 9))
                 self.mark_holdings_dirty(*dirty)
                 receipt["consumed"] = True
-                receipt["replan"] = effect in EQUIPMENT_MUTATIONS
-            elif not self.track.equip(item_uid, target_uid, replace_uid=replace.uid if replace else None):
+                receipt["replan"] = effect in EQUIPMENT_MUTATIONS or effect == PROJECTION_IMMEDIATE
+            elif not self.track.equip(item_uid, target_uid, replace_uid=replace.uid if replace else None,
+                                      promotion_round=promotion_round):
                 self.mark_holdings_dirty(*areas)
+            elif promotion_round is not None:
+                receipt["promotionRound"] = promotion_round
             if (receipt.get("slotAfter") or {}).get("status") == "occupied":
                 self.mark_holdings_dirty("temp")
         return {"item": item_uid, "target": target_uid, **receipt}
@@ -1062,30 +1213,43 @@ class Live:
         rnd = s["match"]["round"] or self.state.round
         if reward_kind == "command":
             return self.finish_command_reward(pending, rnd)
-        choices = shop_reward_choices(s["self"]["shop"].get("slots") or [], kind=reward_kind)
-        if pending and not choices:
-            # The cards slide into their calibrated slots after the pager is used.
+        def visible_choices(screen, min_cards=3):
+            shop = screen["self"]["shop"]
+            phase = bool(shop.get("rewardPending"))
+            return shop_reward_choices(shop.get("slots") or [], min_cards=1 if phase else min_cards,
+                                       kind=reward_kind, reward_phase=phase)
+
+        choices = visible_choices(s)
+        if (pending or s["self"]["shop"].get("rewardPending")) and not choices:
+            # Reward controls can change before the cards finish sliding into place.
+            from .screen.flow import SHOP_CARDS_ROI, wait_stable
             deadline = time.monotonic() + 3
             while not choices and time.monotonic() < deadline:
-                time.sleep(0.15)
+                # Read only once the card row is still (it slides in after the click); at most up to the 3 s deadline.
+                left_ms = max(1, int((deadline - time.monotonic()) * 1000))
+                try:
+                    wait_stable(self.tasker, SHOP_CARDS_ROI, target=SHOP_CARDS_ROI, timeout_ms=left_ms)
+                except RuntimeError:  # the wait node did not run: keep the fixed poll
+                    time.sleep(0.15)
                 s = self.read()
                 current_round = s["match"]["round"]
                 if current_round is not None and current_round != rnd:
-                    raise Stop("The round changed while waiting for the pager reward")
+                    raise Stop("The round changed while waiting for the shop reward")
                 if current_round == rnd:
-                    choices = shop_reward_choices(s["self"]["shop"].get("slots") or [], kind=reward_kind)
-            if not choices and s["match"]["round"] == rnd:
-                choices = shop_reward_choices(s["self"]["shop"].get("slots") or [], min_cards=1, kind=reward_kind)
+                    choices = visible_choices(s)
+            if pending and not choices and s["match"]["round"] == rnd:
+                choices = visible_choices(s, min_cards=1)
         if not choices:
             paid = [card for card in s["self"]["shop"].get("slots") or []
                     if card and card.get("id") and (card.get("price") or 0) > 0]
-            if pending and s["match"]["round"] == rnd and len(paid) >= 2:
+            if (pending and not s["self"]["shop"].get("rewardPending")
+                    and s["match"]["round"] == rnd and len(paid) >= 2):
                 return self.reconcile_closed_equipment_reward(pending, s)
             raise RuntimeError(f"No {reward_kind} reward was verified in the expanded shop")
         areas = {"hand"} & set(self.state.dirty_areas)
         layout = None
         if (not pending and "board" in self.state.dirty_areas
-                and s["self"]["deployCount"] == len(self.track.board)):
+                and s["self"]["deployCount"] == self.track.deployed_chess_count()):
             areas.add("board")
             layout = self.board_ledger(rnd)
         if not pending and areas:
@@ -1148,27 +1312,53 @@ class Live:
         self.save()
         self.log({"screen": "prep", "round": rnd, "decision": "equipment reward already closed", "result": receipt})
 
-    def prep_uncalibrated_leader(self, s):
-        rnd = s["match"]["round"]
-        own = s["self"]
-        count = own["deployCount"]
-        if not own["canReady"] or not count or count != len(self.track.board) or "board" in self.state.dirty_areas:
-            raise Stop("Could not verify the deployed formation for the uncalibrated leader round")
-        row = {"screen": "preparation", "round": rnd, "decision": "leader round", "deployed": count}
-        if self.a.stop_before_end or self.a.stop_after_layout:
-            self.log(row)
-            return True
-        if not self.acting():
-            self.log(row)
-            return self.a.once or self.wait_change("preparation", rnd)
-        if self.mode == "confirm":
-            input(f"round {rnd}: start battle with the deployed formation. Enter to continue, Ctrl+C to stop: ")
-        self.log({**row, "result": self.ready_battle()})
+    def boss_clock(self, rnd):
+        from .screen.boss_timing import BossTiming
 
-    def ready_battle(self):
+        if rnd not in (self.gd.boss_round, self.gd.hidden_round):
+            return None
+        data = self.state.boss_timing
+        if data is None or data["round"] != rnd:
+            data = {"round": rnd, "modeId": self.state.mode_id,
+                    "template": self.state.leader_template,
+                    "bossId": self.state.hidden_boss_id if rnd == self.gd.hidden_round else self.state.boss_id}
+            self.state.boss_timing = data
+
+        def report(phase):
+            result = {"phase": phase, **data}
+            if phase == "end":
+                started, ended = data.get("startedAt"), data["endedAt"]
+                zero_at = data.get("zeroAt")
+                result["reachedZero"] = True if zero_at is not None else None
+                if zero_at is not None:
+                    result["secondsAfterZero"] = round(ended - zero_at, 3)
+                if started is not None:
+                    result["wallSeconds"] = round(ended - started, 3)
+                start_timer, end_timer = data.get("startTimer"), data.get("endTimer")
+                if end_timer is None and ended - data.get("lastTimerAt", 0) <= 1.5:
+                    end_timer = data["lastTimer"]
+                    result["endTimerFromPreviousFrame"] = end_timer
+                if end_timer is not None and end_timer > 0 and zero_at is None:
+                    result["reachedZero"] = False
+                    if start_timer is not None:
+                        result["countdownSeconds"] = start_timer - end_timer
+                        result["killRemaining"] = end_timer if data.get("outcome") == "cleared" else None
+                if data.get("endLife") is None and ended - data.get("lastLifeAt", 0) <= 1.5:
+                    result["endLifeFromPreviousFrame"] = data["lastLife"]
+            self.log({"screen": "battle", "round": rnd, "decision": "boss timing", "result": result})
+            self.save()
+
+        return BossTiming(data, report)
+
+    def ready_battle(self, replay_state):
         with device_action(self.state, self.save, "ready"):
-            receipt = self.flow("ready-battle")
+            rnd = self.state.round
+            timing = self.boss_clock(rnd)
+            receipt = self.flow("ready-battle", **({"boss_timing": timing} if timing is not None else {}))
             self.state.prep_round = None
+        if timing is not None:
+            state = self.screen_state(replay_state, include_overflow=True)
+            self.log({"screen": "battle", "round": rnd, "decision": "boss replay input", "state": state})
         return receipt
 
     def plan_end(self, st, receipts):
@@ -1186,8 +1376,29 @@ class Live:
             observed = self.read()
             if (observed["match"]["round"], observed["match"]["stageId"]) != (rnd, stage):
                 raise RuntimeError("Preparation changed while making room for the layout")
+            if self.state.dirty_areas:
+                self.refresh_holdings(observed, self.board_calibration(stage))
             st = self.screen_state(observed)
         raise RuntimeError("The layout continued to request room after all visible sources were considered")
+
+    def choose_leader_layout(self, board, state, result):
+        from .layout import calibrated_layout_tiles
+        from .leader_candidate import GENERATOR, SCORER, MODEL_FILES, LeaderCandidate
+
+        directory = ROOT / "models"
+        missing = [name for name in MODEL_FILES if not (directory / name).is_file()]
+        if missing:
+            return result, {"source": "sidecar", "reason": f"Missing leader model files: {', '.join(missing)}"}
+        try:
+            if getattr(self, "_leader_candidate", None) is None:
+                self._leader_candidate = LeaderCandidate(directory)
+            chosen = self._leader_candidate.choose(self.track, state, calibrated_layout_tiles(board),
+                                                    seed=self.a.seed + self.state.round)
+        except (ImportError, OSError, RuntimeError, ValueError, KeyError, AssertionError) as error:
+            return result, {"source": "sidecar", "reason": str(error)}
+        return chosen, {"source": "models", "generator": GENERATOR, "scorer": SCORER,
+                        "index": chosen["index"], "score": chosen["scores"][chosen["index"]],
+                        "candidates": len(chosen["scores"]), "template": state["bossTemplate"]}
 
     def end_flow(self, st, row):
         """END: battle-mark command, legacy layout + equipment (sidecar), resolveTemp (rules), free hand slot, ready."""
@@ -1202,10 +1413,42 @@ class Live:
         receipts["sidecar"] = {"ops": r["ops"], "ms": r.get("ms")}
         board = self.board_calibration(st["match"]["stageId"])
         final = [p for p in r["board"] if p["kind"] == "chess"]
+        projected_uids = [p["uid"] for p in final if self.track._loc_by_uid(p["uid"]) is None]
+        if projected_uids:
+            for operation in r["ops"]:
+                if operation["op"] != "equip":
+                    continue
+                source = self.track._loc_by_uid(operation["item"])
+                target = self.track._loc_by_uid(operation["target"])
+                if (source is None or source["area"] != "temp" or target is None
+                        or target["area"] not in {"hand", "board"} or target["piece"].kind != "chess"):
+                    continue
+                item_id = source["piece"].id
+                effect = next((buff.get("key") for buff in (self.gd.item(item_id) or {}).get("buffs") or []), None)
+                if ("hand" not in EQUIPMENT_MUTATIONS.get(effect, ())
+                        and self.rules.effect_key(item_id) != "use_equip_reward_char_chess"):
+                    continue
+                # A generated operator only has a real UID after the equipment resolves on the device.
+                receipts["equipment"] = [self.apply_equipment(operation, board, rnd)]
+                self.log({**row, "result": receipts})
+                return
+            raise Stop(f"Projected operators {projected_uids} have no executable recruitment equipment")
         result = {"board": [{"uid": p["uid"], "to": [p["row"], p["col"]], "dir": p["dir"]} for p in final]}
-        # The sidecar has already chosen the layout. The executor validates pieces and tiles.
+        leader = board.get("deployField") == "bossLeft"
+        bonds = r.get("bonds") if leader else None
         state = build_layout_state(self.track, st, [p["uid"] for p in final],
-                                   boss_template=self.state.leader_template, require_bonds=False)
+                                   boss_template=self.state.leader_template, tracked_bonds=bonds,
+                                   require_bonds=bonds is not None)
+        if leader:
+            if bonds is None:
+                receipts["leaderModel"] = {"source": "sidecar", "reason": "Projected bond state unavailable"}
+            else:
+                planned_items = {p["uid"]: p.get("items", []) for p in final}
+                for profile in state["pieces"]:
+                    profile["items"] = planned_items[profile["uid"]]
+                result, receipts["leaderModel"] = self.choose_leader_layout(board, state, result)
+            self.log({"screen": "preparation", "round": rnd, "decision": "leader layout",
+                      "result": receipts["leaderModel"]})
 
         def remember_step(step):
             self.state.layout_step = {"round": rnd, "stageId": board["stageId"], "uid": step.uid,
@@ -1218,9 +1461,12 @@ class Live:
             self.save()
 
         with device_action(self.state, self.save, "layout"):
+            self.state.layout_before = {"round": rnd, "stageId": board["stageId"],
+                                        "holdings": snapshot_holdings(self.track)}
             receipts["layout"] = execute_layout(self.tasker, self.reader, board, self.track, st, state, result,
                                                 operator_names={p["uid"]: self.name(p["id"]) for p in final},
                                                 before_step=remember_step, on_step=commit_step)
+            self.state.layout_before = None
         for operation in r["ops"]:
             if operation["op"] == "equip":
                 try:
@@ -1238,6 +1484,7 @@ class Live:
                 if receipt.get("replan") or self.state.dirty_areas:
                     self.log({**row, "result": receipts})
                     return
+        self.place_summons(board, [p for p in r["board"] if p["kind"] == "token"], rnd, receipts)
         if self.a.stop_after_layout:
             anchor = self.flow("observe")
             if anchor["screen"] != "preparation" or anchor["round"] != rnd:
@@ -1248,13 +1495,83 @@ class Live:
         res = self.rules.resolve_temp(st2)
         if res:
             receipts["temp"] = self.resolve_visible(res, rnd, st["match"]["stageId"])
+            if self.state.dirty_areas:
+                self.log({**row, "result": receipts})
+                return
             st2 = self.screen_state(self.read(), include_overflow=True)
         tail = self.sc.request("tail", st2, ops=[])
         if tail["ops"]:
             receipts["tail"] = self.resolve_visible([(o["op"], o["uid"]) for o in tail["ops"]],
                                                     rnd, st["match"]["stageId"])
-        receipts["ready"] = self.ready_battle()
+            if self.state.dirty_areas:
+                self.log({**row, "result": receipts})
+                return
+        for action in receipts.get("tail", []):
+            if after := action["receipt"].get("after"):
+                st2["self"]["funds"] = after["funds"]
+        receipts["ready"] = self.ready_battle(st2)
         self.log({**row, "result": receipts})
+
+    def place_summons(self, board, planned, rnd, receipts):
+        if not planned:
+            return
+        from .layout import as_tile
+        from .layout_recovery import matches_piece
+        from .screen.board_read import inspect_board_positions
+        from .screen.deploy import deploy, deployment_tiles
+        from .screen.shop import set_shop_open
+
+        field = board.get("deployField", "normal")
+        legal_tiles = deployment_tiles(self.reader.stages[board["stageId"]], field, include_changed=False)
+        calibrated_tiles = set.intersection(*({tuple(cell[:2]) for cell in board["views"][view]["groundCenters"]}
+                                              for view in ("normal", "drag")))
+        for target in planned:
+            tile = (target["row"], target["col"])
+            owner_uid = target.get("ownerUid")
+            owner = self.track._loc_by_uid(owner_uid)
+            stack = next(((i, p) for i, p in enumerate(self.track.hand)
+                          if p and p.kind == "token" and p.id == target["id"] and p.owner == owner_uid), None)
+            if tile not in legal_tiles or tile not in calibrated_tiles:
+                receipts.setdefault("skippedSummons", []).append({**target, "reason": "Destination is not calibrated"})
+                continue
+            if not owner or owner["area"] != "board" or stack is None:
+                receipts.setdefault("skippedSummons", []).append({**target, "reason": "No matching deployed owner or hand stack"})
+                continue
+            slot, summon = stack
+            s = self.read()
+            self._shop_open = False
+            own = s["self"]
+            funds, cap, count = (own.get(key) for key in ("funds", "deployCap", "deployCount"))
+            if (s["match"]["round"] != rnd or s["match"]["stageId"] != board["stageId"]
+                    or any(type(value) is not int for value in (funds, cap, count))
+                    or count != self.track.deployed_chess_count()):
+                raise RuntimeError("The preparation HUD did not match the summon placement")
+            legal = self.sc.request("validateSummon", self.screen_state(s), uid=summon.uid,
+                                    ownerUid=owner_uid, to=list(tile), dir=target["dir"])
+            if not legal["legal"]:
+                receipts.setdefault("skippedSummons", []).append({**target, "reason": legal["reason"]})
+                continue
+            set_shop_open(self.tasker, False)
+            owner_tile = as_tile(owner["key"])
+            visible = inspect_board_positions(self.tasker, self.reader, board, [owner_tile, tile],
+                                              (rnd, funds, cap - count))
+            if not matches_piece(visible[owner_tile], owner["piece"]) or visible[tile] is not None:
+                raise RuntimeError("The summon owner or destination did not match the board")
+            step = {"round": rnd, "stageId": board["stageId"], "uid": summon.uid, "id": summon.id,
+                    "source": None, "target": tile, "handSlot": slot}
+            with device_action(self.state, self.save, "deploy summon"):
+                self.state.layout_step = step
+                self.save()
+                receipt = deploy(self.tasker, self.reader.slots, board, self.reader.stages, slot, self.name(summon.id),
+                                 *tile, target["dir"], expected_round=rnd, stage_confirmed=True, summon=True)
+                step["verifiedFacing"] = receipt["facing"]
+                self.save()
+                placed = inspect_board_positions(self.tasker, self.reader, board, [tile],
+                                                 (rnd, funds, receipt["remainingAfter"]))
+                if not matches_piece(placed[tile], summon) or not self.track.move(summon.uid, tile, receipt["facing"]):
+                    raise RuntimeError("The summon was not verified at the destination after release")
+                self.state.layout_step = None
+            receipts.setdefault("summons", []).append({**receipt, "ownerUid": owner_uid, "targetVerified": True})
 
     # ---------- waiting ----------
     def wait_change(self, screen, rnd=None, timeout=600):
@@ -1290,12 +1607,13 @@ class Live:
         self.save()
         self.log({"screen": screen, "round": self.state.round, "decision": "reconnect", "result": receipt})
 
-    def run(self, games):
+    def run(self, games: int | None):
         done = 0
         if self.a.resume and self.resume_doc is not None:
             self.resume(self.resume_doc)
-        while done < games:
+        while games is None or done < games:
             pending = self.state.pending_equipment_reward or {}
+            in_wait = False  # the battle wait is running: a failure there is a boundary failure
             if pending.get("kind") == "command" and self.acting():
                 screen = "equipmentReward"
             elif self._prep_chain:
@@ -1305,6 +1623,10 @@ class Live:
                 self._shop_open = False
             try:
                 if screen == "unknown":
+                    # Transition frames settle on their own: observe again (no input is sent), within the boundary budget.
+                    used = self._spend_retry(("boundary", self.state.game))
+                    if used <= BOUNDARY_RETRY_LIMIT:
+                        raise Retry(f"screen not recognized (boundary re-read {used}/{BOUNDARY_RETRY_LIMIT})")
                     raise Stop("screen not recognized")
                 if screen == "preparation":
                     if self.prep() or self.a.once:
@@ -1329,17 +1651,28 @@ class Live:
                         observed_round = getattr(self, "_observation", {}).get("round")
                         if observed_round is not None:
                             self.state.round = observed_round
-                        self.flow("wait-battle", battle_round=self.state.round)
+                        in_wait = True
+                        timing = self.boss_clock(self.state.round)
+                        self.flow("wait-battle", battle_round=self.state.round,
+                                  **({"boss_timing": timing} if timing is not None else {}))
+                        in_wait = False
                     else:
                         self.wait_change(screen)
+                elif screen in MATCH_START_SCREENS and self._match_start_owed:
+                    # A match start failed part way: the same entry sequence again, from the screen it stopped on
+                    self.new_match()
                 elif screen in ("briefing", "squadSelection"):
                     raise Stop(f"{screen} reached outside a match start (started by hand?)")
                 elif screen == "matchEnded":
-                    outcome = self.flow("observe").get("result")
-                    self.screenshot("match-end")
-                    self.log({"screen": screen, "round": self.state.round, "decision": "match end", "result": outcome})
-                    done += 1
-                    if done < games:
+                    if not self._match_start_owed:  # a retry after a failed start must not count the game twice
+                        outcome = self.flow("observe").get("result")
+                        if self.state.boss_timing and self.state.boss_timing["round"] == self.state.round:
+                            self.boss_clock(self.state.round).finish({"screen": "matchInterrupted", "result": outcome})
+                        self.screenshot("match-end")
+                        self.log({"screen": screen, "round": self.state.round, "decision": "match end", "result": outcome})
+                        done += 1
+                        self._match_start_owed = True
+                    if games is None or done < games:
                         self.new_match(restart=True)
                 else:
                     raise Unsupported(f"screen {screen}")
@@ -1362,6 +1695,16 @@ class Live:
                     print(f"RETRY after executor error: {e}", flush=True)
                     self._shop_open = self._prep_chain = False
                     continue
+                if (screen in BOUNDARY_SCREENS or in_wait) and self._spend_retry(("boundary", self.state.game)) <= BOUNDARY_RETRY_LIMIT:
+                    # Own budget. The next iteration observes the screen again; a battle wait may have clicked through a
+                    # settlement, so the holdings are re-read (the same rule as recover_match).
+                    if in_wait:
+                        self.mark_holdings_dirty("hand", "temp", "board")
+                    self.screenshot("retry")
+                    self.log({"screen": screen, "decision": "boundary retry", "error": f"{type(e).__name__}: {e}"})
+                    print(f"RETRY after boundary error: {e}", flush=True)
+                    self._shop_open = self._prep_chain = False
+                    continue
                 self.screenshot("error")
                 self.save()
                 self.log({"screen": screen, "decision": "executor error", "error": f"{type(e).__name__}: {e}",
@@ -1371,7 +1714,7 @@ class Live:
         return 0
 
 
-def main():
+def main(live_type=Live):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--games", type=int, default=1)
     ap.add_argument("--policy", type=Path, help="policy checkpoint. Resume uses the saved checkpoint by default")
@@ -1424,7 +1767,7 @@ def main():
     if not CATALOG_JSON.exists():
         sys.exit("data/catalog.json missing: run `node tools/export_catalog.mjs` first")
     try:
-        live = Live(a)
+        live = live_type(a)
     except (OSError, RuntimeError, ValueError) as error:
         ap.exit(3, f"harness startup: {error}\n")
     try:

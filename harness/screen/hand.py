@@ -8,9 +8,10 @@ from maa.context import Context
 from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
-from .capture import ADB_ADDRESS, ADB_PATH, OCR_RESOURCE, SAMPLES, connect, load_ocr
-from .native import Frame
-from .read import CATALOG, ROOT, Reader, chess_identity, integer, read_json
+from .capture import add_session_args, session
+from .native import Frame, completed_data
+from .session import run as run_task, task_recognition
+from .read import CATALOG, Reader, chess_identity, integer, screen_integer
 
 
 # An operator standing on the bench carries a dark tier badge above its slot (collapsed-shop view). Measured on device:
@@ -38,18 +39,10 @@ class HandRecognition(CustomRecognition):
     def __init__(self, reader: Reader):
         super().__init__()
         self.reader = reader
-        self.stage = None
-        self.hud = None
-        self.slot = None
         self.center = None
-        self.result = None
+        self.anchor = None
 
-    def select_slot(self, slot: int) -> None:
-        self.slot = slot
-        self.center = self.reader.slots["hand"]["centersByView"]["normal"][slot]
-        self.result = None
-
-    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> tuple | None:
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | tuple | None:
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
@@ -58,95 +51,92 @@ class HandRecognition(CustomRecognition):
         kind = json.loads(argv.custom_recognition_param)
         board_details = frame.hit("Withdraw.Icon")
         hand_details = frame.hit("HandSale.Button") or frame.hit("Screen.OperatorDetails")
-        details = board_details or hand_details
+        token = None
+        if not board_details and not hand_details and kind in {"read", "empty", "closed", "reset"}:
+            candidate = chess_identity(self.reader, frame)
+            if candidate.get("kind") == "token":
+                token = candidate
+        details = board_details or hand_details or token is not None
         hit = (0, 0, 1, 1)
         if kind == "reset":
             return hit if details else None
         if kind == "read":
-            if not hand_details or board_details:
+            if board_details or (not hand_details and token is None):
                 return None
-            self.result = {"screenSlot": self.slot, "status": "occupied", **chess_identity(self.reader, frame)}
-            return hit
-
-        hud = (
-            integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)"),
-            integer(frame.text("Screen.Funds")),
-            integer(frame.text("Screen.DeployCollapsed"), r"剩余可放置角色:([0-9]+)"),
-        )
-        if None in hud or (self.hud is not None and self.hud != hud):
-            return None
+            return self.AnalyzeResult(hit, {"status": "occupied", **(token or chess_identity(self.reader, frame))})
         if details:
             return None
-        stage = self.reader.stage_hint or frame.stage_id()
-        if stage is None or (self.stage is not None and stage != self.stage):
+        hud = {
+            "round": integer(frame.text("ArkRoundNumber"), r"回合([0-9]+)"),
+            "funds": integer(frame.text("Screen.Funds")),
+            "remaining": screen_integer(frame, "Screen.DeployCollapsed"),
+            "stageId": self.reader.stage_hint or frame.stage_id(),
+        }
+        if None in hud.values() or (self.anchor is not None and self.anchor != hud):
             return None
         if kind == "pick":
-            self.stage, self.hud = stage, hud
-            return (*self.center, 1, 1)
+            return self.AnalyzeResult((*self.center, 1, 1), hud)
+        if completed_data(argv.task_detail.nodes, "Hand.Pick") != hud:
+            return None
         if kind == "empty":
-            self.result = {"screenSlot": self.slot, "status": "empty", "name": None,
-                           "id": None, "baseId": None, "candidateIds": []}
-        return hit
+            return self.AnalyzeResult(hit, {"status": "empty", "name": None, "id": None,
+                                            "baseId": None, "candidateIds": []})
+        if kind == "closed":
+            result = completed_data(argv.task_detail.nodes, "Hand.ReadDetails")
+            if result is not None:
+                return self.AnalyzeResult(hit, result)
+        return None
 
 
-def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, *, skip_bare: bool = False) -> dict:
+def read_hand(tasker: Tasker, reader: Reader, indices: list[int] | None = None, *,
+              skip_bare: bool = False, known_summons: tuple[int, ...] = ()) -> dict:
     """Return hand slots from one preparation round and restore its anchor.
 
     skip_bare: slots whose tier badge is clearly absent are reported empty without a click (collapsed-shop view only).
     At least one slot is always clicked, which also reads the HUD (round, funds, remaining placements, stage).
     """
-    capacity = len(reader.slots["hand"]["centersByView"]["normal"])
+    centers = reader.slots["hand"]["centersByView"]["normal"]
+    capacity = len(centers)
     selected = list(range(capacity)) if indices is None else indices
     bare = []
     if skip_bare and indices is None:
         job = tasker.controller.post_screencap().wait()
         if not job.succeeded or job.get().shape != (720, 1280, 3):
             raise RuntimeError("Could not capture the bench frame")
-        selected = bench_candidates(job.get(), reader) or [0]
+        selected = sorted(set(bench_candidates(job.get(), reader)).union(known_summons)) or [0]
         bare = [slot for slot in range(capacity) if slot not in selected]
     if not selected or any(type(slot) is not int or not 0 <= slot < capacity for slot in selected):
         raise ValueError("Expected valid zero-based screen hand slots")
     if len(set(selected)) != len(selected):
         raise ValueError("Hand slots must be unique")
 
-    recognition = HandRecognition(reader)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkHand", recognition):
-        raise RuntimeError("Could not register hand inspection")
+    anchor = None
     observations = []
-    try:
+    recognition = HandRecognition(reader)
+    with task_recognition(tasker, "ArkHand", recognition):
         for position, slot in enumerate(selected):
-            recognition.select_slot(slot)
-            override = {"Hand.Inspect": {"next": ["Hand.Pick"]}} if position else {}
-            job = tasker.post_task("Hand.Inspect", override).wait()
-            detail = job.get()
-            last = detail.nodes[-1].name if detail and detail.nodes else ""
-            if not job.succeeded or last not in ("Hand.Empty", "Hand.Closed") or recognition.result is None:
+            recognition.center, recognition.anchor = centers[slot], anchor
+            job = run_task(tasker, "Hand.InspectNext" if position else "Hand.Inspect")
+            nodes = job.nodes
+            result = completed_data(nodes, "Hand.Empty", "Hand.Closed")
+            anchor = completed_data(nodes, "Hand.Pick")
+            if not job.succeeded or result is None or anchor is None:
                 raise RuntimeError(f"Hand slot {slot} or return to preparation could not be verified")
-            observations.append(recognition.result)
-    finally:
-        resource.unregister_custom_recognition("ArkHand")
+            observations.append({"screenSlot": slot, **result})
     observations += [{"screenSlot": slot, "status": "empty", "name": None, "id": None, "baseId": None,
                       "candidateIds": []} for slot in bare]
     observations.sort(key=lambda row: row["screenSlot"])
-    return {"stageId": recognition.stage, "round": recognition.hud[0], "funds": recognition.hud[1],
-            "remaining": recognition.hud[2], "slots": observations}
+    return {**anchor, "slots": observations}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hand-slot", type=int, action="append", dest="indices")
-    parser.add_argument("--catalog", type=Path, default=CATALOG)
-    parser.add_argument("--adb", type=Path, default=ADB_PATH)
-    parser.add_argument("--address", default=ADB_ADDRESS)
-    parser.add_argument("--ocr-resource", type=Path, default=OCR_RESOURCE)
+    add_session_args(parser, catalog=CATALOG)
     args = parser.parse_args()
     try:
-        Tasker.set_log_dir(SAMPLES / "_logs")
-        Tasker.set_save_draw(False)
-        Tasker.set_save_on_error(False)
-        reader = Reader(args.catalog, read_json(ROOT / "calib/slots.json"))
-        tasker = load_ocr(connect(args.adb, args.address), args.ocr_resource)
+        screen_session = session(args.adb, args.address, args.ocr_resource, catalog=args.catalog)
+        tasker, reader = screen_session.tasker, screen_session.reader
         result = read_hand(tasker, reader, args.indices)
         print(json.dumps(result, ensure_ascii=False))
     except (OSError, RuntimeError, ValueError) as error:

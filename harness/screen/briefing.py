@@ -1,16 +1,35 @@
 """Inspect and confirm one of the two briefing bond groups through MaaFramework."""
 
 import json
+import logging
 
 from maa.context import Context
 from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
-from .native import Frame
-from .read import Reader
+from .names import match_name
+from .native import MIN_NAME_SCORE, Frame, completed_data
+from .session import run as run_task, task_recognition
+from .read import Reader, clean
 
 
 GROUP_REGIONS = ([22, 130, 423, 447], [445, 130, 444, 447])
+# The briefing layout is fixed: page title, enemy leader name, core bond names. Reading just these beats a full-screen OCR.
+BRIEFING_TEXT_ROIS = ([400, 10, 320, 50], [915, 295, 345, 140], [15, 240, 875, 235])
+LOG = logging.getLogger(__name__)
+
+
+def enabled_addon_bonds(frame: Frame, reader: Reader) -> list[str]:
+    """Add-on bond ids listed in the briefing's add-on row. A bond missing from the row is disabled for the match."""
+    found = set()
+    for row in frame.rows("Briefing.AddonName"):
+        if row.score < MIN_NAME_SCORE:
+            continue
+        candidates = [key for key, data in reader.bonds.get(match_name(clean(row.text), reader.bonds), [])
+                      if not data.get("isCore")]
+        if len(candidates) == 1:
+            found.add(candidates[0])
+    return sorted(found)
 
 
 class BriefingRecognition(CustomRecognition):
@@ -19,15 +38,14 @@ class BriefingRecognition(CustomRecognition):
         self.reader = reader
         self.group = group
         self.expected_groups = expected_groups
-        self.result = None
-        self.reason = "Both core-bond groups were not verified on the briefing page"
 
-    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> tuple | None:
+    def analyze(self, context: Context, argv: CustomRecognition.AnalyzeArg) -> CustomRecognition.AnalyzeResult | None:
         if argv.image.shape != (720, 1280, 3):
             return None
         frame = Frame(context, argv.image)
         if not frame.hit("Lifecycle.Briefing"):
             return None
+        frame.text_rois = BRIEFING_TEXT_ROIS
         observed = self.reader.read(frame)
         state = observed["match"]
         choice = state["bondChoice"]
@@ -36,34 +54,38 @@ class BriefingRecognition(CustomRecognition):
         groups = choice["groups"]
         disabled = set(state["disabledBonds"] or [])
         selected = next((idx for idx in range(2) if set(groups[1 - idx]) == disabled), None)
-        if self.expected_groups is not None and any(set(read) != set(expected)
-                for read, expected in zip(groups, self.expected_groups, strict=True)):
-            self.reason = "The displayed bond groups differ from the expected groups"
-            return None
         kind = json.loads(argv.custom_recognition_param)
+        switched = completed_data(argv.task_detail.nodes, "Briefing.Switch") if kind == "confirm" else None
+        expected_groups = switched["groups"] if switched is not None else self.expected_groups
+        if expected_groups is not None and any(set(read) != set(expected)
+                for read, expected in zip(groups, expected_groups, strict=True)):
+            LOG.debug("The displayed bond groups differ from the expected groups")
+            return None
         if kind == "switch":
             if selected is None or selected == self.group:
                 return None
-            candidates = frame.rows("Briefing.GroupButton", roi=GROUP_REGIONS[self.group])
-            if len(candidates) != 1:
-                self.reason = "No unique selection button was verified for the requested group"
-                return None
-            self.expected_groups = groups
-            return tuple(candidates[0].box)
+            # Verified on device: the unselected group has no text button; tapping inside its panel selects it.
+            x, y, width, height = GROUP_REGIONS[self.group]
+            return self.AnalyzeResult((x + width // 2 - 20, y + height // 2 - 20, 40, 40), {"groups": groups})
         if kind == "confirm":
             if selected != self.group:
-                self.reason = "The requested bond group was not highlighted"
+                LOG.debug("The requested bond group was not highlighted")
                 return None
             buttons = frame.rows("Entry.ReadyButton")
             if len(buttons) != 1:
-                self.reason = "No unique briefing confirmation button was verified"
+                LOG.debug("No unique briefing confirmation button was verified")
                 return None
             hit = tuple(buttons[0].box)
-        else:
+        elif kind == "read":
             hit = (0, 0, 1, 1)
-        self.result = {"groups": groups, "previewSelected": selected, "disabledBonds": state["disabledBonds"],
-                       "bossId": state["bossId"], "modeId": observed["config"]["modeId"]}
-        return hit
+        else:
+            return None
+        detail = {"groups": groups, "previewSelected": selected,
+                  "disabledBonds": state["disabledBonds"], "bossId": state["bossId"],
+                  "modeId": observed["config"]["modeId"]}
+        if kind == "read":  # the add-on row costs an extra OCR pass; only the inspection result needs it
+            detail["enabledAddonBonds"] = enabled_addon_bonds(frame, self.reader)
+        return self.AnalyzeResult(hit, detail)
 
 
 def inspect_briefing(tasker: Tasker, reader: Reader) -> dict:
@@ -86,25 +108,20 @@ def choose_bond_group(tasker: Tasker, reader: Reader, group: int, *,
 def run_briefing(tasker: Tasker, reader: Reader, *, group: int | None,
                  expected_groups: list[list[str]] | None) -> dict:
     recognition = BriefingRecognition(reader, group, expected_groups)
-    resource = tasker.resource
-    if not resource.register_custom_recognition("ArkBriefing", recognition):
-        raise RuntimeError("Could not register briefing recognition")
     entry, terminal = ("Briefing.Inspect", "Briefing.Read") if group is None else (
         "Briefing.Select", "Briefing.Confirmed")
-    try:
-        job = tasker.post_task(entry).wait()
-        detail = job.get()
-        steps = [node.name for node in detail.nodes] if detail else []
-    finally:
-        resource.unregister_custom_recognition("ArkBriefing")
-    if job.succeeded and steps and steps[-1] == terminal and recognition.result is not None:
-        result = recognition.result
+    with task_recognition(tasker, "ArkBriefing", recognition):
+        job = run_task(tasker, entry)
+    nodes = job.nodes
+    steps = [node.name for node in nodes]
+    result = completed_data(nodes, "Briefing.Read" if group is None else "Briefing.Confirm")
+    if job.finished(terminal) and result is not None:
         if group is None:
             return result
         return {**result, "bondChoice": {"groups": result["groups"], "picked": group},
                 "after": "strategySelection", "steps": steps}
-    if "Briefing.Confirm" in steps:
+    if any(node.name == "Briefing.Confirm" and node.action is not None for node in nodes):
         raise RuntimeError("Briefing confirmation was attempted; the next screen could not be verified")
-    if "Briefing.Switch" in steps:
-        raise RuntimeError(f"Group preview was changed; briefing was not confirmed: {recognition.reason}")
-    raise RuntimeError(f"No briefing input was sent: {recognition.reason}")
+    if any(node.name == "Briefing.Switch" and node.action is not None for node in nodes):
+        raise RuntimeError("Group preview switch was attempted; briefing was not confirmed")
+    raise RuntimeError("No briefing input was sent: The bond groups or briefing controls could not be verified")

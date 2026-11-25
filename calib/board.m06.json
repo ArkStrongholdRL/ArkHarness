@@ -1,0 +1,21 @@
+{
+  "stageId": "act3autochess_m06",
+  "groundGeometry": "board.json",
+  "views": {
+    "normal": {"heightCorrection": [
+      {"row": 10, "col": 4, "dx": 3, "dy": -13},
+      {"row": 11, "col": 5, "dx": 2, "dy": -13},
+      {"row": 12, "col": 6, "dx": 0, "dy": -13}
+    ]},
+    "shopExpanded": {"heightCorrection": [
+      {"row": 10, "col": 4, "dx": 3, "dy": -12},
+      {"row": 11, "col": 5, "dx": 2, "dy": -12},
+      {"row": 12, "col": 6, "dx": 0, "dy": -12}
+    ]},
+    "drag": {"heightCorrection": [
+      {"row": 10, "col": 4, "dx": 3, "dy": -13},
+      {"row": 11, "col": 5, "dx": 2, "dy": -13},
+      {"row": 12, "col": 6, "dx": 0, "dy": -13}
+    ]}
+  }
+}

@@ -1,4 +1,4 @@
-"""Offline evaluation of generated solo leader layouts against the live planner."""
+"""Rank generated solo leader layouts with the live planner's preflight."""
 
 import sys
 from pathlib import Path
@@ -8,6 +8,11 @@ import torch
 
 from .layout import as_tile, plan_layout
 from .track import Track
+
+
+GENERATOR = "layout_gen_v4.pt"
+SCORER = "layout_scorer_v5.pt"
+MODEL_FILES = (GENERATOR, SCORER, "layout_gen_infer.py", "layout_scorer_infer.py")
 
 
 class LeaderCandidate:
@@ -20,8 +25,8 @@ class LeaderCandidate:
         finally:
             sys.path.pop(0)
 
-        self.gen = LayoutGen(torch.load(directory / "layout_gen_v1.pt", map_location="cpu", weights_only=True))
-        self.scorer = LayoutScorer(torch.load(directory / "layout_scorer_v2.pt", map_location="cpu", weights_only=True))
+        self.gen = LayoutGen(torch.load(directory / GENERATOR, map_location="cpu", weights_only=True))
+        self.scorer = LayoutScorer(torch.load(directory / SCORER, map_location="cpu", weights_only=True))
 
     def choose(self, track: Track, state: dict, calibrated: set[tuple[int, int]], *,
                count: int = 64, seed: int = 0) -> dict:
@@ -32,6 +37,8 @@ class LeaderCandidate:
             raise ValueError("Leader candidate needs the solo left field, boss template and complete bond input")
         if not state["pieces"]:
             raise ValueError("Leader candidate needs a nonempty lineup")
+        if state["bossTemplate"] not in self.gen.TIX or state["bossTemplate"] not in self.scorer.TIX:
+            raise ValueError(f"Leader template {state['bossTemplate']} is outside the model vocabulary")
         if any(not (9 <= row <= 12 and 3 <= col <= 9) for row, col in map(as_tile, state["map"])):
             raise ValueError("Leader candidate requires canonical boss field coordinates")
 

@@ -14,7 +14,12 @@
     "all_of": ["ArkRest", "ArkSnapshot"]
   },
   "ArkCancelFacing": {
-    "recognition": "And", "all_of": ["Screen.Drag", "Board.FacingCancel"], "box_index": 1,
+    "recognition": "And", "all_of": [
+      {"recognition": "Or", "any_of": [
+        "Screen.Drag", {"recognition": "And", "all_of": ["Board.FacingCancelIcon", "ArkRestText"]}
+      ]},
+      "Board.FacingCancel"
+    ], "box_index": 1,
     "action": "Click", "pre_delay": 200, "post_delay": 200, "max_hit": 1,
     "next": ["ArkReturnedRest"], "timeout": 4000
   },
@@ -30,6 +35,11 @@
   },
   "ArkRestNotRecovered": {
     "next": ["ArkReturnedRest"],
+    "timeout": 3000
+  },
+  "Wait.Stable": {
+    "recognition": "DirectHit",
+    "action": "DoNothing",
     "timeout": 3000
   }
 }
