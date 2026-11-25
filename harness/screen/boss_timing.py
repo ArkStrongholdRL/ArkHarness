@@ -31,9 +31,16 @@ class BossTiming:
         self.report("start")
 
     def sample(self, frame: Frame) -> None:
-        if "endedAt" in self.data or not frame.hit("Battle.LeaderHud"):
-            return
         now = time.time()
+        ended = self.data.get("endedAt")
+        if ended is not None and (self.data.get("outcome") or now - ended > 4):
+            return
+        if not frame.hit("Battle.LeaderHud"):
+            return
+        if ended is not None:
+            if any(row.text.startswith("完美作战") for row in frame.rows("Battle.ResultText")):
+                self.end(now, None, None, "settlement", "cleared")
+            return
         value = self.timer(frame, now)
         life = screen_integer(frame, "Screen.Life")
         if life is not None:
@@ -43,7 +50,8 @@ class BossTiming:
             self.report("zero")
         texts = {row.text.rstrip("！!") for row in frame.rows("Battle.ResultText")}
         if texts & {"作战结束", "完美作战"}:
-            self.end(now, value, life, "settlement", "cleared" if "完美作战" in texts else None)
+            outcome = "cleared" if "完美作战" in texts else "failed" if life == 0 else None
+            self.end(now, value, life, "settlement", outcome)
 
     def end(self, now: float, value: int | None, life: int | None, source: str, outcome: str | None) -> None:
         ended = "endedAt" in self.data
