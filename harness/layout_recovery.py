@@ -1,4 +1,4 @@
-"""Reconcile the two possible outcomes of one interrupted layout operation."""
+"""Reconcile interrupted layout operations using only their affected positions."""
 
 from copy import copy, deepcopy
 
@@ -52,9 +52,6 @@ def recover_layout_batch(tasker, reader, board, track, baseline, screen, pending
     before = copy(track)
     before._bounty_picks = {}
     restore_track(before, {"track": baseline["holdings"]})
-    count = screen["self"]["deployCount"]
-    if before.deployed_chess_count() != count:
-        raise RuntimeError(f"Neither the saved board nor the board before layout matches the live count ({count})")
     possible = layout_outcomes(track, pending) if pending else None
     return reconcile_layout(tasker, reader, board, track, before, screen, baseline,
                             possible=possible, require_count=True)
@@ -71,7 +68,15 @@ def reconcile_layout(tasker, reader, board, track, changed, screen, scope, *,
     def signature(piece):
         return (piece.kind, piece.uid, piece.id, piece.count) if piece else None
 
-    alternatives = [changed] if possible is None else [changed, possible]
+    outcomes = [(False, track), (True, changed)]
+    if possible is not None:
+        outcomes.append((True, possible))
+    alternatives = [candidate for applied, candidate in outcomes if applied]
+    if require_count:
+        outcomes = [(applied, candidate) for applied, candidate in outcomes
+                    if candidate.deployed_chess_count() == count]
+    if not outcomes:
+        raise RuntimeError(f"No saved layout outcome matches the live deployment count ({count})")
     slots = sorted({i for candidate in alternatives for i, (before, after) in enumerate(zip(track.hand, candidate.hand))
                     if signature(before) != signature(after)} | ({summon_slot} if summon_slot is not None else set()))
     rack_slots = sorted({i for candidate in alternatives
@@ -80,6 +85,9 @@ def reconcile_layout(tasker, reader, board, track, changed, screen, scope, *,
     keys = sorted({k for candidate in alternatives for k in track.board.keys() | candidate.board.keys()
                    if signature(track.board.get(k)) != signature(candidate.board.get(k))})
     tiles = [as_tile(key) for key in keys]
+    if not (tiles or slots or rack_slots):
+        # With no observable changes, retain the recorded facing and UID assignments.
+        return {"applied": False, "handSlots": [], "rackSlots": [], "tiles": []}
     view = set_shop_open(tasker, False)
     try:
         if (view["before"]["round"], view["before"]["funds"]) != (rnd, funds):
@@ -104,12 +112,10 @@ def reconcile_layout(tasker, reader, board, track, changed, screen, scope, *,
         raise RuntimeError("The affected holding slots could not all be read")
 
     def matches(candidate):
-        return ((not require_count or candidate.deployed_chess_count() == count)
-                and all(matches_piece(observed_hand[i], candidate.hand[i]) for i in slots)
+        return (all(matches_piece(observed_hand[i], candidate.hand[i]) for i in slots)
                 and all(matches_piece(observed_rack[i], candidate.temp[i]) for i in rack_slots)
                 and all(matches_piece(observed_board[tile], candidate.board.get(key)) for key, tile in zip(keys, tiles)))
 
-    outcomes = [(False, track), (True, changed)]
     verified = [(applied, candidate) for applied, candidate in outcomes if matches(candidate)]
     if len(verified) != 1:
         raise RuntimeError(f"Could not determine the interrupted layout outcome for hand slots {slots} and tiles {tiles}")

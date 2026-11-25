@@ -630,6 +630,10 @@ class Reader:
             name = catalog_identity(self, frame, "Board.CarriedName", kind)["name"] or name
         names = self.shop_base_names.get(kind, {})
         candidates = names.get(match_name(name, names, approximate=False), [])
+        if not candidates and use_portrait and kind == "chess" and level is not None and price:
+            items = self.shop_by_tier_price.get(("item", level, price), {})
+            if len(items.get(name, ())) == 1:
+                return {"kind": "item", "id": items[name][0][0], "price": price, "sold": False, "frozen": None}
         fuzzy = not candidates and price is not None and bool(name)
         if not use_portrait and (fuzzy or len({data.get("tier") for _, data in candidates}) > 1):
             level = tier(frame.text("Screen.ShopCardTier", roi=position["tierROI"]))

@@ -18,7 +18,8 @@
     "recognition": "OCR",
     "roi": [440, 19, 76, 28],
     "only_rec": true,
-    "expected": "^回合\\s*[0-9]+$"
+    "expected": "^回合\\s*[0-9]+$",
+    "replace": [["^回合\\s*[?？]{2}$", "回合15"]]
   },
   "ArkExpectedRound": {
     "recognition": "Custom",

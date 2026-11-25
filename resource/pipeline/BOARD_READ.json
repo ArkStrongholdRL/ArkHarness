@@ -80,5 +80,8 @@
   },
   "BoardRead.Empty": {
     "recognition": "Custom", "custom_recognition": "ArkBoardRead", "custom_recognition_param": "empty"
+  },
+  "BoardRead.MonstrProsthesis": {
+    "recognition": "TemplateMatch", "template": "monstr-prosthesis.png", "threshold": 0.88
   }
 }

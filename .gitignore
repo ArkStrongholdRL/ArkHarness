@@ -8,6 +8,7 @@ samples/
 !resource/image/drag-sell-icon.png
 !resource/image/enemy-header-icon.png
 !resource/image/facing-cancel.png
+!resource/image/monstr-prosthesis.png
 !resource/image/ready-checkbox.png
 !resource/image/shop-card-tier-[1-6].png
 !resource/image/shop-level-[1-6]-*.png
@@ -76,3 +77,4 @@ tools/dump_*.mjs
 tools/dry_prep_chain.py
 tools/paired.py
 tools/bonds_truth.mjs
+promo/

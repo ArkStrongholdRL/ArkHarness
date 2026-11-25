@@ -7,6 +7,7 @@ from .track import Track
 
 
 DIRECTIONS = {"UP", "RIGHT", "DOWN", "LEFT"}
+MONSTR_PROSTHESIS = "token_10050_monstr_prosts"
 
 
 def tile_key(tile: tuple[int, int]) -> str:
@@ -93,7 +94,11 @@ def build_layout_state(track: Track, screen: dict, selected_uids: list[int], *,
         pieces.append({"uid": uid, "id": piece.id, "golden": track.gd.is_golden(piece.id),
                        "items": [item.id for item in piece.items], **piece_features(record),
                        "key": loc.get("key"), "dir": piece.dir if loc["area"] == "board" else None})
-    return {"pieces": pieces, "map": layout_tiles(stage, view), "bonds": bonds,
+    tiles = layout_tiles(stage, view)
+    for key, piece in track.board.items():
+        if piece.id == MONSTR_PROSTHESIS and piece.owner in selected_uids:
+            tiles.pop(key, None)
+    return {"pieces": pieces, "map": tiles, "bonds": bonds,
             "bossTemplate": boss_template, "lp": lp, "deployCap": cap, "side": side}
 
 
@@ -144,7 +149,8 @@ def plan_layout(track: Track, state: dict, result: dict, calibrated: set[tuple[i
         leaving_owners = {piece.uid for piece in shadow.board.values()
                           if piece.kind == "chess" and piece.uid not in targets}
         excess = [piece.uid for piece in sorted(shadow.board.values(), key=lambda p: p.kind != "token")
-                  if piece.uid not in targets and (piece.kind != "token" or piece.owner not in leaving_owners)]
+                  if piece.uid not in targets and piece.id != MONSTR_PROSTHESIS
+                  and (piece.kind != "token" or piece.owner not in leaving_owners)]
         pending = [uid for uid in profile_order if not at_destination(shadow._loc_by_uid(uid), targets[uid])]
         if not pending and not excess:
             return steps

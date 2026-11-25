@@ -813,23 +813,20 @@ class Live:
         rnd, stage = s["match"]["round"], s["match"]["stageId"]
         count = s["self"].get("deployCount")
         board = self.board_calibration(stage)
-        if step and "uid" in step:
-            try:
-                result = recover_layout_step(self.tasker, self.reader, board, self.track, step, s)
-            except RuntimeError:
-                if baseline is None or count == self.track.deployed_chess_count():
-                    raise
-            else:
-                self.state.layout_step = step = None
-                self.save()
-                self.log({"screen": "preparation", "round": rnd, "decision": "layout step recovery", "result": result})
-        if baseline is None:
-            return
-        if count != self.track.deployed_chess_count():
-            result = recover_layout_batch(self.tasker, self.reader, board, self.track, baseline, s, step)
-            self.log({"screen": "preparation", "round": rnd, "decision": "layout recovery", "result": result})
+        pending = step if step and "uid" in step else None
+        if baseline is not None and ("board" in self.state.dirty_areas
+                                     or count != self.track.deployed_chess_count()):
+            result = recover_layout_batch(self.tasker, self.reader, board, self.track, baseline, s, pending)
+            decision = "layout recovery"
+        elif pending:
+            result = recover_layout_step(self.tasker, self.reader, board, self.track, pending, s)
+            decision = "layout step recovery"
+        else:
+            result = None
         self.state.layout_step = self.state.layout_before = None
         self.save()
+        if result is not None:
+            self.log({"screen": "preparation", "round": rnd, "decision": decision, "result": result})
 
     def prep(self):
         if not self.can_inspect_panels():
@@ -838,6 +835,12 @@ class Live:
         chained, self._prep_chain = self._prep_chain, False
         shop_view = None
         if not self._shop_open:
+            if (self.acting() and self.state.round is not None and "temp" in self.state.dirty_areas
+                    and {"board", "hand"}.intersection(self.state.dirty_areas)):
+                from .screen.equip_choice import cancel_equipment_replacement
+                if cancel_equipment_replacement(self.tasker, self.state.round):
+                    self.log({"screen": "preparation", "round": self.state.round,
+                              "decision": "equipment replacement cancelled on recovery"})
             shop_view = set_shop_open(self.tasker, True)
             self._shop_open = True
         s = self.read()
@@ -964,9 +967,11 @@ class Live:
     def sell_owned(self, p, area, index, stage_id, round_number):
         if area == "hand":
             from .screen.hand_sale import sell_hand
+            self._shop_open = False
             return sell_hand(self.tasker, self.slots, index, self.name(p["id"]), by_balance=True)
         if area == "board":
             from .screen.sell import sell_board
+            self._shop_open = False
             return sell_board(self.tasker, self.slots, self.board_calibration(stage_id), self.name(p["id"]),
                               p["row"], p["col"], expected_round=round_number, stage_confirmed=True, by_balance=True)
         raise Unsupported(f"operator {p['uid']} has no verified sale position")
@@ -1149,7 +1154,8 @@ class Live:
                                         expected_gain=expected_gain, gain_range=gain_range)
             if replace:
                 choice = choose_equipment_dialog(self.tasker, ("替换装备", "装备替换", "请选择要替换的装备"),
-                                                 {self.name(replace.id): replace.id}, rnd)
+                                                 {self.name(replace.id): replace.id}, rnd,
+                                                 replace_on=self.name(carrier.id))
                 receipt["replaced"] = replace.id
                 if not reward_kind:
                     receipt["after"] = {key: choice[key] for key in ("round", "funds")}
@@ -1364,18 +1370,26 @@ class Live:
         receipts["sidecar"] = {"ops": r["ops"], "ms": r.get("ms")}
         board = self.board_calibration(st["match"]["stageId"])
         final = [p for p in r["board"] if p["kind"] == "chess"]
-        if any(self.track._loc_by_uid(p["uid"]) is None for p in final):
+        projected_uids = [p["uid"] for p in final if self.track._loc_by_uid(p["uid"]) is None]
+        if projected_uids:
             for operation in r["ops"]:
                 if operation["op"] != "equip":
                     continue
                 source = self.track._loc_by_uid(operation["item"])
-                if (source is None or self.rules.effect_key(source["piece"].id) != "use_equip_reward_char_chess"
-                        or self.track._loc_by_uid(operation["target"]) is None):
+                target = self.track._loc_by_uid(operation["target"])
+                if (source is None or source["area"] != "temp" or target is None
+                        or target["area"] not in {"hand", "board"} or target["piece"].kind != "chess"):
                     continue
-                # The projected merge has no live UID until Mimic Matter is equipped.
+                item_id = source["piece"].id
+                effect = next((buff.get("key") for buff in (self.gd.item(item_id) or {}).get("buffs") or []), None)
+                if ("hand" not in EQUIPMENT_MUTATIONS.get(effect, ())
+                        and self.rules.effect_key(item_id) != "use_equip_reward_char_chess"):
+                    continue
+                # A generated operator only has a real UID after the equipment resolves on the device.
                 receipts["equipment"] = [self.apply_equipment(operation, board, rnd)]
                 self.log({**row, "result": receipts})
                 return
+            raise Stop(f"Projected operators {projected_uids} have no executable recruitment equipment")
         result = {"board": [{"uid": p["uid"], "to": [p["row"], p["col"]], "dir": p["dir"]} for p in final]}
         leader = board.get("deployField") == "bossLeft"
         bonds = r.get("bonds") if leader else None

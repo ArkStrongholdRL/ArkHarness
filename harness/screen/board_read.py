@@ -2,12 +2,14 @@
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 from maa.context import Context
 from maa.custom_recognition import CustomRecognition
 from maa.tasker import Tasker
 
+from ..layout import MONSTR_PROSTHESIS
 from .capture import add_session_args, session
 from .deploy import FACING_MARKERS, deployment_tiles, matches_facing, read_board, tile_point
 from .native import Frame, completed_data
@@ -81,7 +83,16 @@ class BoardReadRecognition(CustomRecognition):
         if kind == "read":
             identity = chess_identity(self.reader, frame)
             if not board_details and identity.get("kind") != "token":
-                return None
+                if not details or not self.allow_missing or identity.get("candidateIds"):
+                    return None
+                devices = self.reader.stages[self.stage].get("devices", [])
+                names = sorted({device["name"] for device in devices if device.get("name")})
+                if not names:
+                    return None
+                name = frame.text("Board.CarriedName", expected="^(?:" + "|".join(map(re.escape, names)) + ")$")
+                if name not in names:
+                    return None
+                identity = {"kind": "device", "name": name, "candidateIds": []}
             return self.AnalyzeResult(hit, identity)
         identity = completed_data(argv.task_detail.nodes, "BoardRead.ReadDetails") if kind == "closed" else None
         if identity and identity.get("kind") == "token":
@@ -131,6 +142,13 @@ class BoardReadRecognition(CustomRecognition):
         if kind == "closed":
             return self.AnalyzeResult(hit, identity) if identity is not None else None
         if kind == "empty":
+            if self.allow_missing and self.tile is not None:
+                # The prosthesis has a board sprite but tapping it opens no details.
+                x, y = self.points[self.tile]
+                if frame.hit("BoardRead.MonstrProsthesis", roi=[x - 20, y - 36, 48, 60]):
+                    token = MONSTR_PROSTHESIS
+                    return self.AnalyzeResult(hit, {"kind": "token", "name": "重构体", "id": token,
+                                                    "baseId": token, "candidateIds": [token]})
             return hit if self.allow_missing else None
         if kind == "pick":
             if self.tile is None:
@@ -188,7 +206,8 @@ def inspect_board_positions(tasker: Tasker, reader: Reader, board: dict, tiles: 
         for tile in tiles:
             recognition.tile = tile
             job = require_terminal(tasker, "BoardRead.Inspect", "BoardRead.Closed", allow_empty=True)
-            observed[tile] = completed_data(job.nodes, "BoardRead.Closed")
+            identity = completed_data(job.nodes, job.last)
+            observed[tile] = None if identity and identity.get("kind") == "device" else identity
     return observed
 
 
@@ -219,9 +238,9 @@ def read_board_tiles(tasker: Tasker, reader: Reader, board: dict, *,
     def inspect(tile):
         recognition.tile = tile
         job = require_terminal(tasker, "BoardRead.Inspect", "BoardRead.Closed", allow_empty=recognition.allow_missing)
-        if job.last == "BoardRead.Empty":
+        identity = completed_data(job.nodes, job.last)
+        if (job.last == "BoardRead.Empty" and identity is None) or (identity and identity.get("kind") == "device"):
             return
-        identity = completed_data(job.nodes, "BoardRead.Closed")
         row, col = tile
         if identity is None or (known_layout is not None and identity["name"] != known_layout[tile][0]):
             raise RuntimeError(f"The operator at ({row}, {col}) did not match the saved board")
